@@ -18,8 +18,6 @@ import (
 	"context"
 	"fmt"
 	math "math"
-	"sort"
-	"strings"
 	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
@@ -230,37 +228,6 @@ func TestHashJoinerError(t *testing.T) {
 			}
 		})
 	}
-}
-
-func checkExpectedRows(
-	types []sqlbase.ColumnType, expectedRows sqlbase.EncDatumRows, results *RowBuffer,
-) error {
-	var expected []string
-	for _, row := range expectedRows {
-		expected = append(expected, row.String(types))
-	}
-	sort.Strings(expected)
-	expStr := strings.Join(expected, "")
-
-	var rets []string
-	for {
-		row, meta := results.Next()
-		if meta != nil {
-			return errors.Errorf("unexpected metadata: %v", meta)
-		}
-		if row == nil {
-			break
-		}
-		rets = append(rets, row.String(types))
-	}
-	sort.Strings(rets)
-	retStr := strings.Join(rets, "")
-
-	if expStr != retStr {
-		return errors.Errorf("invalid results; expected:\n   %s\ngot:\n   %s",
-			expStr, retStr)
-	}
-	return nil
 }
 
 // TestDrain tests that, if the consumer starts draining, the hashJoiner informs

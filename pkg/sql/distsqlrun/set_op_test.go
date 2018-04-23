@@ -17,7 +17,6 @@ package distsqlrun
 import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlbase"
-	"github.com/cockroachdb/cockroach/pkg/util/encoding"
 )
 
 type setOpTestCase struct {
@@ -26,29 +25,6 @@ type setOpTestCase struct {
 	leftInput   sqlbase.EncDatumRows
 	rightInput  sqlbase.EncDatumRows
 	expected    sqlbase.EncDatumRows
-}
-
-func setOpTestCaseToMergeJoinerTestCase(tc setOpTestCase) mergeJoinerTestCase {
-	spec := MergeJoinerSpec{Type: tc.setOpType}
-	ordering := make(sqlbase.ColumnOrdering, 0, len(tc.columnTypes))
-	outCols := make([]uint32, 0, len(tc.columnTypes))
-	for i := range tc.columnTypes {
-		ordering = append(ordering, sqlbase.ColumnOrderInfo{ColIdx: i, Direction: encoding.Ascending})
-		outCols = append(outCols, uint32(i))
-	}
-	spec.LeftOrdering = convertToSpecOrdering(ordering)
-	spec.RightOrdering = convertToSpecOrdering(ordering)
-
-	return mergeJoinerTestCase{
-		spec:          spec,
-		outCols:       outCols,
-		leftTypes:     tc.columnTypes,
-		leftInput:     tc.leftInput,
-		rightTypes:    tc.columnTypes,
-		rightInput:    tc.rightInput,
-		expectedTypes: tc.columnTypes,
-		expected:      tc.expected,
-	}
 }
 
 func setOpTestCaseToJoinerTestCase(tc setOpTestCase) joinerTestCase {

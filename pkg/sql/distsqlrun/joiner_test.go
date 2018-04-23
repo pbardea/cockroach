@@ -18,6 +18,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlbase"
 	"github.com/pkg/errors"
+	"sort"
+	"strings"
 )
 
 type joinerTestCase struct {
@@ -813,6 +815,494 @@ func joinerTestCases() []joinerTestCase {
 				{v[2], v[2]},
 			},
 		},
+
+		// Originally from merge joiner.
+		{
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.InnerJoin,
+			// Implicit @1 = @3 constraint.
+			outCols:   []uint32{0, 3, 4},
+			leftTypes: twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{v[0], v[0]},
+				{v[1], v[4]},
+				{v[2], v[4]},
+				{v[3], v[1]},
+				{v[4], v[5]},
+				{v[5], v[5]},
+			},
+			rightTypes: threeIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{v[1], v[0], v[4]},
+				{v[3], v[4], v[1]},
+				{v[4], v[4], v[5]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[1], v[0], v[4]},
+				{v[3], v[4], v[1]},
+				{v[4], v[4], v[5]},
+			},
+		},
+		{
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.InnerJoin,
+			// Implicit @1 = @3 constraint.
+			outCols:   []uint32{0, 1, 3},
+			leftTypes: twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{v[0], v[0]},
+				{v[0], v[1]},
+			},
+			rightTypes: twoIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{v[0], v[4]},
+				{v[0], v[1]},
+				{v[0], v[0]},
+				{v[0], v[5]},
+				{v[0], v[4]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[0], v[0], v[4]},
+				{v[0], v[0], v[1]},
+				{v[0], v[0], v[0]},
+				{v[0], v[0], v[5]},
+				{v[0], v[0], v[4]},
+				{v[0], v[1], v[4]},
+				{v[0], v[1], v[1]},
+				{v[0], v[1], v[0]},
+				{v[0], v[1], v[5]},
+				{v[0], v[1], v[4]},
+			},
+		},
+		{
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.InnerJoin,
+			onExpr:      Expression{Expr: "@4 >= 4"},
+			// Implicit AND @1 = @3 constraint.
+			outCols:   []uint32{0, 1, 3},
+			leftTypes: twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{v[0], v[0]},
+				{v[0], v[1]},
+				{v[1], v[0]},
+				{v[1], v[1]},
+			},
+			rightTypes: twoIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{v[0], v[4]},
+				{v[0], v[1]},
+				{v[0], v[0]},
+				{v[0], v[5]},
+				{v[0], v[4]},
+				{v[1], v[4]},
+				{v[1], v[1]},
+				{v[1], v[0]},
+				{v[1], v[5]},
+				{v[1], v[4]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[0], v[0], v[4]},
+				{v[0], v[0], v[5]},
+				{v[0], v[0], v[4]},
+				{v[0], v[1], v[4]},
+				{v[0], v[1], v[5]},
+				{v[0], v[1], v[4]},
+				{v[1], v[0], v[4]},
+				{v[1], v[0], v[5]},
+				{v[1], v[0], v[4]},
+				{v[1], v[1], v[4]},
+				{v[1], v[1], v[5]},
+				{v[1], v[1], v[4]},
+			},
+		},
+		{
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.FullOuterJoin,
+			onExpr:      Expression{Expr: "@2 >= @4"},
+			// Implicit AND @1 = @3 constraint.
+			outCols:   []uint32{0, 1, 3},
+			leftTypes: twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{v[0], v[0]},
+				{v[0], v[0]},
+
+				{v[1], v[5]},
+
+				{v[2], v[0]},
+				{v[2], v[8]},
+
+				{v[3], v[5]},
+
+				{v[6], v[0]},
+			},
+			rightTypes: twoIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{v[0], v[5]},
+				{v[0], v[5]},
+
+				{v[1], v[0]},
+				{v[1], v[8]},
+
+				{v[2], v[5]},
+
+				{v[3], v[0]},
+				{v[3], v[0]},
+
+				{v[5], v[0]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[0], v[0], null},
+				{v[0], v[0], null},
+				{null, null, v[5]},
+				{null, null, v[5]},
+
+				{v[1], v[5], v[0]},
+				{null, null, v[8]},
+
+				{v[2], v[0], null},
+				{v[2], v[8], v[5]},
+
+				{v[3], v[5], v[0]},
+				{v[3], v[5], v[0]},
+
+				{null, null, v[0]},
+
+				{v[6], v[0], null},
+			},
+		},
+		{
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.LeftOuterJoin,
+			// Implicit @1 = @3 constraint.
+			outCols:   []uint32{0, 3, 4},
+			leftTypes: twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{v[0], v[0]},
+				{v[1], v[4]},
+				{v[2], v[4]},
+				{v[3], v[1]},
+				{v[4], v[5]},
+				{v[5], v[5]},
+			},
+			rightTypes: threeIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{v[1], v[0], v[4]},
+				{v[3], v[4], v[1]},
+				{v[4], v[4], v[5]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[0], null, null},
+				{v[1], v[0], v[4]},
+				{v[2], null, null},
+				{v[3], v[4], v[1]},
+				{v[4], v[4], v[5]},
+				{v[5], null, null},
+			},
+		},
+		{
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.RightOuterJoin,
+			// Implicit @1 = @3 constraint.
+			outCols:   []uint32{3, 1, 2},
+			leftTypes: threeIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{v[1], v[0], v[4]},
+				{v[3], v[4], v[1]},
+				{v[4], v[4], v[5]},
+			},
+			rightTypes: twoIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{v[0], v[0]},
+				{v[1], v[4]},
+				{v[2], v[4]},
+				{v[3], v[1]},
+				{v[4], v[5]},
+				{v[5], v[5]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[0], null, null},
+				{v[1], v[0], v[4]},
+				{v[2], null, null},
+				{v[3], v[4], v[1]},
+				{v[4], v[4], v[5]},
+				{v[5], null, null},
+			},
+		},
+		{
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.FullOuterJoin,
+			// Implicit @1 = @3 constraint.
+			outCols:   []uint32{0, 3, 4},
+			leftTypes: twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{v[0], v[0]},
+				{v[1], v[4]},
+				{v[2], v[4]},
+				{v[3], v[1]},
+				{v[4], v[5]},
+			},
+			rightTypes: threeIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{v[1], v[0], v[4]},
+				{v[3], v[4], v[1]},
+				{v[4], v[4], v[5]},
+				{v[5], v[5], v[1]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[0], null, null},
+				{v[1], v[0], v[4]},
+				{v[2], null, null},
+				{v[3], v[4], v[1]},
+				{v[4], v[4], v[5]},
+				{null, v[5], v[1]},
+			},
+		},
+		{
+			leftEqCols:  []uint32{0, 1},
+			rightEqCols: []uint32{0, 1},
+			joinType:    sqlbase.FullOuterJoin,
+			outCols:     []uint32{0, 1, 2, 3},
+			leftTypes:   twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{null, v[4]},
+				{v[0], null},
+				{v[0], v[1]},
+				{v[2], v[4]},
+			},
+			rightTypes: twoIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{null, v[4]},
+				{v[0], null},
+				{v[0], v[1]},
+				{v[2], v[4]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{null, v[4], null, null},
+				{null, null, null, v[4]},
+				{v[0], null, null, null},
+				{null, null, v[0], null},
+				{v[0], v[1], v[0], v[1]},
+				{v[2], v[4], v[2], v[4]},
+			},
+		},
+		{
+			// Ensure that NULL = NULL is not matched.
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.InnerJoin,
+			outCols:     []uint32{0, 1},
+			leftTypes:   oneIntCol,
+			leftInput: sqlbase.EncDatumRows{
+				{null},
+				{v[0]},
+			},
+			rightTypes: oneIntCol,
+			rightInput: sqlbase.EncDatumRows{
+				{null},
+				{v[1]},
+			},
+			expected: sqlbase.EncDatumRows{},
+		},
+		{
+			// Ensure that semi joins doesn't output duplicates from
+			// the right side.
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.LeftSemiJoin,
+			outCols:     []uint32{0, 1},
+			leftTypes:   twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{v[1], v[2]},
+				{v[2], v[3]},
+			},
+			rightTypes: twoIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{v[2], v[2]},
+				{v[2], v[2]},
+				{v[3], v[3]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[2], v[3]},
+			},
+		},
+		{
+			// Ensure that duplicate rows in the left are matched
+			// in the output in semi-joins.
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.LeftSemiJoin,
+			outCols:     []uint32{0, 1},
+			leftTypes:   twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{v[1], v[2]},
+				{v[1], v[2]},
+				{v[2], v[3]},
+				{v[3], v[4]},
+				{v[3], v[5]},
+			},
+			rightTypes: twoIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{v[2], v[2]},
+				{v[3], v[3]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[2], v[3]},
+				{v[3], v[4]},
+				{v[3], v[5]},
+			},
+		},
+		{
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			// Ensure that NULL == NULL doesn't match in semi-join.
+			joinType:  sqlbase.LeftSemiJoin,
+			outCols:   []uint32{0, 1},
+			leftTypes: twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{null, v[2]},
+				{v[2], v[3]},
+			},
+			rightTypes: twoIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{null, v[3]},
+				{v[2], v[4]},
+				{v[2], v[5]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[2], v[3]},
+			},
+		},
+		{
+			// Ensure that OnExprs are satisfied for semi-joins.
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.LeftSemiJoin,
+			onExpr:      Expression{Expr: "@1 >= 4"},
+			// Implicit AND @1 = @3 constraint.
+			outCols:   []uint32{0, 1},
+			leftTypes: twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{v[0], v[0]},
+				{v[0], v[1]},
+				{v[1], v[0]},
+				{v[1], v[1]},
+				{v[5], v[0]},
+				{v[5], v[1]},
+				{v[6], v[0]},
+				{v[6], v[1]},
+			},
+			rightTypes: twoIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{v[0], v[4]},
+				{v[0], v[1]},
+				{v[0], v[0]},
+				{v[0], v[5]},
+				{v[0], v[4]},
+				{v[5], v[4]},
+				{v[5], v[1]},
+				{v[5], v[0]},
+				{v[5], v[5]},
+				{v[5], v[4]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[5], v[0]},
+				{v[5], v[1]},
+			},
+		},
+		{
+			// Ensure that duplicate rows in the left are matched
+			// in the output in anti-joins.
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.LeftAntiJoin,
+			outCols:     []uint32{0, 1},
+			leftTypes:   twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{v[1], v[2]},
+				{v[1], v[3]},
+				{v[2], v[3]},
+				{v[3], v[4]},
+				{v[3], v[5]},
+			},
+			rightTypes: twoIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{v[2], v[2]},
+				{v[3], v[3]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[1], v[2]},
+				{v[1], v[3]},
+			},
+		},
+		{
+			// Ensure that NULL == NULL doesn't match in anti-join.
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.LeftAntiJoin,
+			outCols:     []uint32{0, 1},
+			leftTypes:   twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{null, v[2]},
+				{v[2], v[3]},
+			},
+			rightTypes: twoIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{null, v[3]},
+				{v[2], v[4]},
+				{v[2], v[5]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{null, v[2]},
+			},
+		},
+		{
+			// Ensure that OnExprs are satisfied for semi-joins.
+			leftEqCols:  []uint32{0},
+			rightEqCols: []uint32{0},
+			joinType:    sqlbase.LeftAntiJoin,
+			onExpr:      Expression{Expr: "@1 >= 4"},
+			// Implicit AND @1 = @3 constraint.
+			outCols:   []uint32{0, 1},
+			leftTypes: twoIntCols,
+			leftInput: sqlbase.EncDatumRows{
+				{v[0], v[0]},
+				{v[0], v[1]},
+				{v[1], v[0]},
+				{v[1], v[1]},
+				{v[5], v[0]},
+				{v[5], v[1]},
+				{v[6], v[0]},
+				{v[6], v[1]},
+			},
+			rightTypes: twoIntCols,
+			rightInput: sqlbase.EncDatumRows{
+				{v[0], v[4]},
+				{v[0], v[1]},
+				{v[0], v[0]},
+				{v[0], v[5]},
+				{v[0], v[4]},
+				{v[5], v[4]},
+				{v[5], v[1]},
+				{v[5], v[0]},
+				{v[5], v[5]},
+				{v[5], v[4]},
+			},
+			expected: sqlbase.EncDatumRows{
+				{v[0], v[0]},
+				{v[0], v[1]},
+				{v[1], v[0]},
+				{v[1], v[1]},
+				{v[6], v[0]},
+				{v[6], v[1]},
+			},
+		},
 	}
 
 	return testCases
@@ -892,4 +1382,35 @@ func joinerErrorTestCases() []joinerErrorTestCase {
 		},
 	}
 	return testCases
+}
+
+func checkExpectedRows(
+	types []sqlbase.ColumnType, expectedRows sqlbase.EncDatumRows, results *RowBuffer,
+) error {
+	var expected []string
+	for _, row := range expectedRows {
+		expected = append(expected, row.String(types))
+	}
+	sort.Strings(expected)
+	expStr := strings.Join(expected, "")
+
+	var rets []string
+	for {
+		row, meta := results.Next()
+		if meta != nil {
+			return errors.Errorf("unexpected metadata: %v", meta)
+		}
+		if row == nil {
+			break
+		}
+		rets = append(rets, row.String(types))
+	}
+	sort.Strings(rets)
+	retStr := strings.Join(rets, "")
+
+	if expStr != retStr {
+		return errors.Errorf("invalid results; expected:\n   %s\ngot:\n   %s",
+			expStr, retStr)
+	}
+	return nil
 }
