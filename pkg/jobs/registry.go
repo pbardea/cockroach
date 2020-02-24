@@ -277,6 +277,8 @@ var DefaultCancelInterval = base.DefaultTxnHeartbeatInterval
 // Registry.Start has been called will not have any effect.
 var DefaultAdoptInterval = 30 * time.Second
 
+var TestFlag = true
+
 // gcInterval is how often we check for and delete job records older than the
 // retention limit.
 const gcInterval = 1 * time.Hour

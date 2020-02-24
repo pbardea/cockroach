@@ -1124,6 +1124,7 @@ func (scc *schemaChangerCollection) execSchemaChanges(
 		for r := retry.Start(base.DefaultRetryOptions()); r.Next(); {
 			evalCtx := createSchemaChangeEvalCtx(ctx, cfg.Clock.Now(), tracing, ieFactory)
 			if err := sc.exec(ctx, true /* inSession */, &evalCtx); err != nil {
+				log.Infof(ctx, "paul: got error from exec %+v", err)
 				if onError := cfg.SchemaChangerTestingKnobs.OnError; onError != nil {
 					onError(err)
 				}
@@ -1137,6 +1138,7 @@ func (scc *schemaChangerCollection) execSchemaChanges(
 					// 2. If the context is canceled the schema changer quits here
 					// letting the asynchronous code path complete the schema
 					// change.
+					log.Infof(ctx, "paul: got context cancelation")
 				} else if isPermanentSchemaChangeError(err) {
 					// All constraint violations can be reported; we report it as the result
 					// corresponding to the statement that enqueued this changer.
@@ -1151,9 +1153,11 @@ func (scc *schemaChangerCollection) execSchemaChanges(
 					continue
 				}
 			}
+			log.Infof(ctx, "paul: breaking")
 			break
 		}
 	}
+	log.Infof(ctx, "paul: clearning schema changers")
 	scc.schemaChangers = nil
 	return firstError
 }

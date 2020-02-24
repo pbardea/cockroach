@@ -289,13 +289,16 @@ func (sc *SchemaChanger) AcquireLease(
 
 		if tableDesc.Lease != nil {
 			if timeutil.Unix(0, tableDesc.Lease.ExpirationTime).Add(expirationTimeUncertainty).After(timeutil.Now()) {
+				log.Info(ctx, "paul: existing schema change lease")
 				return errExistingSchemaChangeLease
 			}
 			log.Infof(ctx, "Overriding existing expired lease %v", tableDesc.Lease)
 		}
+		log.Info(ctx, "paul: creating schema change lease")
 		lease = sc.createSchemaChangeLease()
 		tableDesc.Lease = &lease
 		b := txn.NewBatch()
+		log.Info(ctx, "paul: updating descriptor with new lease")
 		if err := writeDescToBatch(ctx, false /* kvTrace */, sc.settings, b, tableDesc.GetID(), tableDesc); err != nil {
 			return err
 		}
@@ -905,6 +908,7 @@ func (sc *SchemaChanger) exec(
 	ctx context.Context, inSession bool, evalCtx *extendedEvalContext,
 ) error {
 	ctx = logtags.AddTag(ctx, "scExec", nil)
+	log.Infof(ctx, "paul: running exec %+v", sc)
 	if log.V(2) {
 		log.Infof(ctx, "exec pending schema change; table: %d, mutation: %d",
 			sc.tableID, sc.mutationID)
@@ -941,10 +945,13 @@ func (sc *SchemaChanger) exec(
 		return err
 	}
 
+	log.Info(ctx, "paul: got passed all the maybes")
+
 	// Wait for the schema change to propagate to all nodes after this function
 	// returns, so that the new schema is live everywhere. This is not needed for
 	// correctness but is done to make the UI experience/tests predictable.
 	waitToUpdateLeases := func(refreshStats bool) error {
+		log.Info(ctx, "paul: waiting to updated leases")
 		if err := sc.waitToUpdateLeases(ctx, sc.tableID); err != nil {
 			if err == sqlbase.ErrDescriptorNotFound {
 				return err
@@ -963,12 +970,14 @@ func (sc *SchemaChanger) exec(
 	}
 
 	if sc.mutationID == sqlbase.InvalidMutationID {
+		log.Info(ctx, "paul: got an invalid mutation id")
 		// Nothing more to do.
 		isCreateTableAs := tableDesc.Adding() && tableDesc.IsAs()
 		return waitToUpdateLeases(isCreateTableAs /* refreshStats */)
 	}
 
 	// Acquire lease.
+	log.Info(ctx, "paul: getting a lease")
 	lease, err := sc.AcquireLease(ctx)
 	if err != nil {
 		return err
@@ -983,14 +992,17 @@ func (sc *SchemaChanger) exec(
 	}()
 
 	// Find our job.
+	log.Info(ctx, "paul: finding our job")
 	foundJobID := false
 	for _, g := range tableDesc.MutationJobs {
 		if g.MutationID == sc.mutationID {
 			job, err := sc.jobRegistry.LoadJob(ctx, g.JobID)
 			if err != nil {
+				log.Info(ctx, "paul: error loading job")
 				return err
 			}
 			sc.job = job
+			log.Info(ctx, "paul: job found")
 			foundJobID = true
 			break
 		}
@@ -999,6 +1011,7 @@ func (sc *SchemaChanger) exec(
 	if !foundJobID {
 		// No job means we've already run and completed this schema change
 		// successfully, so we can just exit.
+		log.Info(ctx, "paul: no job")
 		return nil
 	}
 
@@ -1019,6 +1032,7 @@ func (sc *SchemaChanger) exec(
 	}
 
 	// Run through mutation state machine and backfill.
+	log.Info(ctx, "paul: running state machine")
 	err = sc.runStateMachineAndBackfill(ctx, &lease, evalCtx)
 
 	defer func() {

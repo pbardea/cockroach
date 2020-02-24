@@ -1997,8 +1997,17 @@ func (ex *connExecutor) txnStateTransitionsApplyWrapper(
 				)
 				return ie
 			}
+			ctx := ex.Ctx()
+			// Fail all synchronous schema changes.
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithCancel(ex.Ctx())
+			go func() {
+				time.Sleep(time.Second)
+				cancel()
+			}()
+			log.Info(ctx, "paul: starting sync schema changes")
 			if schemaChangeErr := scc.execSchemaChanges(
-				ex.Ctx(), ex.server.cfg, &ex.sessionTracing, ieFactory,
+				ctx, ex.server.cfg, &ex.sessionTracing, ieFactory,
 			); schemaChangeErr != nil {
 				if implicitTxn {
 					// The schema change failed but it was also the only

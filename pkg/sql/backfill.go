@@ -143,6 +143,8 @@ func (sc *SchemaChanger) runBackfill(
 	log.Infof(ctx, "Running backfill for %q, v=%d, m=%d",
 		tableDesc.Name, tableDesc.Version, sc.mutationID)
 
+	time.Sleep(5 * time.Second)
+
 	needColumnBackfill := false
 	for _, m := range tableDesc.Mutations {
 		if m.MutationID != sc.mutationID {
