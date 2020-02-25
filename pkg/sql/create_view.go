@@ -131,7 +131,10 @@ func (n *createViewNode) startExec(params runParams) error {
 			dep.ID = desc.ID
 			backRefMutable.DependedOnBy = append(backRefMutable.DependedOnBy, dep)
 		}
-		if err := params.p.writeSchemaChange(params.ctx, backRefMutable, sqlbase.InvalidMutationID); err != nil {
+		// TODO (lucy): Have more consistent/informative names for dependent jobs.
+		if err := params.p.writeSchemaChange(
+			params.ctx, backRefMutable, sqlbase.InvalidMutationID, "updating view reference",
+		); err != nil {
 			return err
 		}
 	}

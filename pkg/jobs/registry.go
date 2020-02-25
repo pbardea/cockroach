@@ -289,6 +289,10 @@ func (r *Registry) Run(ctx context.Context, ex sqlutil.InternalExecutor, jobs []
 		if err != nil {
 			return errors.Wrapf(err, "Job %d could not be loaded. The job may not have succeeded", jobs[i])
 		}
+		if j.Payload().FinalResumeError != nil {
+			decodedErr := errors.DecodeError(ctx, *j.Payload().FinalResumeError)
+			return decodedErr
+		}
 		if j.Payload().Error != "" {
 			return errors.New(fmt.Sprintf("Job %d failed with error %s", jobs[i], j.Payload().Error))
 		}
@@ -845,10 +849,15 @@ func (r *Registry) adoptionDisabled(ctx context.Context) bool {
 }
 
 func (r *Registry) maybeAdoptJob(ctx context.Context, nl NodeLiveness) error {
+	// TODO (lucy): Returning results in a random order prevents a schema change
+	// job from getting stuck behind another one that depends on it to
+	// finish, due to the order in which table descriptor mutations were queued.
+	// This is not ideal, though, because it makes the behavior less predictable.
+	// Is there a better way to deal with this?
 	const stmt = `
 SELECT id, payload, progress IS NULL, status
 FROM system.jobs
-WHERE status IN ($1, $2, $3, $4, $5) ORDER BY created DESC`
+WHERE status IN ($1, $2, $3, $4, $5) ORDER BY random()`
 	rows, err := r.ex.Query(
 		ctx, "adopt-job", nil /* txn */, stmt,
 		StatusPending, StatusRunning, StatusCancelRequested, StatusPauseRequested, StatusReverting,

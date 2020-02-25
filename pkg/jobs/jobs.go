@@ -13,6 +13,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 
 	"github.com/cockroachdb/cockroach/pkg/internal/client"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
@@ -449,6 +450,7 @@ func (j *Job) canceled(ctx context.Context, fn func(context.Context, *client.Txn
 func (j *Job) Failed(
 	ctx context.Context, err error, fn func(context.Context, *client.Txn) error,
 ) error {
+	log.Errorf(ctx, "failed stack trace: %s", debug.Stack())
 	return j.Update(ctx, func(txn *client.Txn, md JobMetadata, ju *JobUpdater) error {
 		// TODO(spaskob): should we fail if the terminal state is not StatusFailed?
 		if md.Status.Terminal() {

@@ -636,7 +636,7 @@ message TableDescriptor {
     // Nanoseconds since the Unix epoch.
     optional int64 expiration_time = 2 [(gogoproto.nullable) = false];
   }
-  optional SchemaChangeLease lease = 15;
+  optional SchemaChangeLease lease = 15 [deprecated = true];
   // An id for the next group of mutations to be applied together.
   optional uint32 next_mutation_id = 16 [(gogoproto.nullable) = false,
       (gogoproto.customname) = "NextMutationID", (gogoproto.casttype) = "MutationID"];
