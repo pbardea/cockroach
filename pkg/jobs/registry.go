@@ -90,16 +90,17 @@ type NodeLiveness interface {
 // node simply behaves as though its leniency period is 0. Epoch-based
 // nodes will see time-based nodes delay the act of stealing a job.
 type Registry struct {
-	ac         log.AmbientContext
-	stopper    *stop.Stopper
-	db         *client.DB
-	ex         sqlutil.InternalExecutor
-	clock      *hlc.Clock
-	nodeID     *base.NodeIDContainer
-	settings   *cluster.Settings
-	planFn     planHookMaker
-	metrics    Metrics
-	adoptionCh chan struct{}
+	ac                                  log.AmbientContext
+	stopper                             *stop.Stopper
+	db                                  *client.DB
+	ex                                  sqlutil.InternalExecutor
+	clock                               *hlc.Clock
+	nodeID                              *base.NodeIDContainer
+	settings                            *cluster.Settings
+	planFn                              planHookMaker
+	metrics                             Metrics
+	sessionBoundInternalExecutorFactory sqlutil.SessionBoundInternalExecutorFactory
+	adoptionCh                          chan struct{}
 
 	// if non-empty, indicates path to file that prevents any job adoptions.
 	preventAdoptionFile string
@@ -173,6 +174,15 @@ func MakeRegistry(
 	r.mu.jobs = make(map[int64]context.CancelFunc)
 	r.metrics.InitHooks(histogramWindowInterval)
 	return r
+}
+
+// SetSessionBoundInternalExecutorFactory sets the
+// SessionBoundInternalExecutorFactory that will be used by the job registry
+// executor.
+func (r *Registry) SetSessionBoundInternalExecutorFactory(
+	factory sqlutil.SessionBoundInternalExecutorFactory,
+) {
+	r.sessionBoundInternalExecutorFactory = factory
 }
 
 // MetricsStruct returns the metrics for production monitoring of each job type.
@@ -289,6 +299,10 @@ func (r *Registry) Run(ctx context.Context, ex sqlutil.InternalExecutor, jobs []
 		j, err := r.LoadJob(ctx, id)
 		if err != nil {
 			return errors.Wrapf(err, "Job %d could not be loaded. The job may not have succeeded", jobs[i])
+		}
+		if j.Payload().FinalResumeError != nil {
+			decodedErr := errors.DecodeError(ctx, *j.Payload().FinalResumeError)
+			return decodedErr
 		}
 		if j.Payload().Error != "" {
 			return errors.New(fmt.Sprintf("Job %d failed with error %s", jobs[i], j.Payload().Error))
@@ -824,9 +838,14 @@ func (r *Registry) resume(
 			}
 			err = r.stepThroughStateMachine(ctx, phs, resumer, resultsCh, job, status, finalResumeError)
 			if err != nil {
-				if errors.HasAssertionFailure(err) {
-					log.ReportOrPanic(ctx, nil, err.Error())
-				}
+				// TODO (lucy): This needs to distinguish between assertion errors in
+				// the job registry and assertion errors elsewhere, and only fail on the
+				// latter. We have tests that purposely introduce bad state in order to
+				// produce assertion errors, which shouldn't cause the test to panic.
+				// For now, comment this out.
+				// if errors.HasAssertionFailure(err) {
+				// 	log.ReportOrPanic(ctx, nil, err.Error())
+				// }
 				log.Errorf(ctx, "job %d: adoption completed with error %v", *job.ID(), err)
 			}
 			status, err := job.CurrentStatus(ctx)
@@ -861,6 +880,11 @@ func (r *Registry) adoptionDisabled(ctx context.Context) bool {
 func (r *Registry) maybeAdoptJob(
 	ctx context.Context, nl NodeLiveness, randomizeJobOrder bool,
 ) error {
+	// TODO (lucy): Returning results in a random order prevents a schema change
+	// job from getting stuck behind another one that depends on it to
+	// finish, due to the order in which table descriptor mutations were queued.
+	// This is not ideal, though, because it makes the behavior less predictable.
+	// Is there a better way to deal with this?
 	const stmt = `
 SELECT id, payload, progress IS NULL, status
 FROM system.jobs

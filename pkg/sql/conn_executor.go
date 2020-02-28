@@ -32,7 +32,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlbase"
-	"github.com/cockroachdb/cockroach/pkg/sql/sqlutil"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util"
 	"github.com/cockroachdb/cockroach/pkg/util/envutil"
@@ -967,12 +966,6 @@ type connExecutor struct {
 		// tables collects descriptors used by the current transaction.
 		tables TableCollection
 
-		// schemaChangers accumulate schema changes staged for execution. Staging
-		// happens when executing DDL statements. The staged changes are executed once
-		// the transaction that staged them commits (which is once the DDL statement
-		// is done if the statement was executed in an implicit txn).
-		schemaChangers schemaChangerCollection
-
 		// jobs accumulates jobs staged for execution inside the transaction.
 		// Staging happens when executing statements that are implemented with a
 		// job. The jobs are staged via the function QueueJob in
@@ -1181,8 +1174,6 @@ func (ex *connExecutor) resetExtraTxnState(
 	ctx context.Context, dbCacheHolder *databaseCacheHolder, ev txnEvent,
 ) error {
 	ex.extraTxnState.jobs = nil
-
-	ex.extraTxnState.schemaChangers.reset()
 
 	ex.extraTxnState.tables.releaseTables(ctx)
 
@@ -2002,7 +1993,6 @@ func (ex *connExecutor) initEvalCtx(ctx context.Context, evalCtx *extendedEvalCo
 		ExecCfg:           ex.server.cfg,
 		DistSQLPlanner:    ex.server.cfg.DistSQLPlanner,
 		TxnModesSetter:    ex,
-		SchemaChangers:    &ex.extraTxnState.schemaChangers,
 		Jobs:              &ex.extraTxnState.jobs,
 		schemaAccessors:   scInterface,
 		sqlStatsCollector: ex.statsCollector,
@@ -2142,6 +2132,8 @@ func (ex *connExecutor) txnStateTransitionsApplyWrapper(
 				// The schema change/job failed but it was also the only
 				// operation in the transaction. In this case, the transaction's
 				// error is the schema change error.
+				// TODO (lucy): I'm not sure the above is true. What about DROP TABLE
+				// with multiple tables?
 				res.SetError(err)
 			} else {
 				// The schema change/job failed but everything else in the
@@ -2175,26 +2167,8 @@ func (ex *connExecutor) txnStateTransitionsApplyWrapper(
 			ex.ctxHolder.connCtx,
 			ex.server.cfg.InternalExecutor,
 			ex.extraTxnState.jobs); err != nil {
+			log.Infof(context.TODO(), "handling error %+v", err)
 			handleErr(err)
-		}
-
-		scc := &ex.extraTxnState.schemaChangers
-		if len(scc.schemaChangers) != 0 {
-			ieFactory := func(ctx context.Context, sd *sessiondata.SessionData) sqlutil.InternalExecutor {
-				ie := MakeInternalExecutor(
-					ctx,
-					ex.server,
-					ex.memMetrics,
-					ex.server.cfg.Settings,
-				)
-				ie.SetSessionData(sd)
-				return &ie
-			}
-			if schemaChangeErr := scc.execSchemaChanges(
-				ex.Ctx(), ex.server.cfg, &ex.sessionTracing, ieFactory,
-			); schemaChangeErr != nil {
-				handleErr(schemaChangeErr)
-			}
 		}
 
 		// Wait for the cache to reflect the dropped databases if any.

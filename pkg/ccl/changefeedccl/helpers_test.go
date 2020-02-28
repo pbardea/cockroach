@@ -343,10 +343,12 @@ func feed(
 }
 
 func closeFeed(t testing.TB, f cdctest.TestFeed) {
+	t.Logf("[debug] closing feed %+v", f.Partitions())
 	t.Helper()
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("[debug] closed feed %+v", f.Partitions())
 }
 
 func forceTableGC(

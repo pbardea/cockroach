@@ -358,8 +358,12 @@ func TestChangefeedResolvedFrequency(t *testing.T) {
 // operation.
 func TestChangefeedSchemaChangeNoBackfill(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	scope := log.Scope(t)
-	defer scope.Close(t)
+	// defer func(oldInterval time.Duration) {
+	// 	jobs.DefaultAdoptInterval = oldInterval
+	// }(jobs.DefaultAdoptInterval)
+	// jobs.DefaultAdoptInterval = 1 * time.Second
+	// scope := log.Scope(t)
+	// defer scope.Close(t)
 
 	testFn := func(t *testing.T, db *gosql.DB, f cdctest.TestFeedFactory) {
 		sqlDB := sqlutils.MakeSQLRunner(db)

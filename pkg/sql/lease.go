@@ -345,10 +345,15 @@ var errDidntUpdateDescriptor = errors.New("didn't update the table descriptor")
 // not have side effects.
 //
 // Returns the updated versions of the descriptors.
+// TODO (lucy): !!! It's not really a good idea to pass a txn to the update
+// closure. Since we have to set the system config trigger to write schema
+// changes, the only thing we can do in the txn is to write to other system
+// tables (such as jobs, which is the intended use case). Figure out if there's
+// a better way to do this.
 func (s LeaseStore) PublishMultiple(
 	ctx context.Context,
 	tableIDs []sqlbase.ID,
-	update func(map[sqlbase.ID]*sqlbase.MutableTableDescriptor) error,
+	update func(*client.Txn, map[sqlbase.ID]*sqlbase.MutableTableDescriptor) error,
 	logEvent func(*client.Txn) error,
 ) (map[sqlbase.ID]*sqlbase.ImmutableTableDescriptor, error) {
 	errLeaseVersionChanged := errors.New("lease version changed")
@@ -392,8 +397,14 @@ func (s LeaseStore) PublishMultiple(
 				versions[id] = descsToUpdate[id].Version
 			}
 
+			// Write the updated descriptors.
+			// TODO (lucy): does this specifically have to come before update()?
+			if err := txn.SetSystemConfigTrigger(); err != nil {
+				return err
+			}
+
 			// Run the update closure.
-			if err := update(descsToUpdate); err != nil {
+			if err := update(txn, descsToUpdate); err != nil {
 				return err
 			}
 			for _, id := range tableIDs {
@@ -412,10 +423,6 @@ func (s LeaseStore) PublishMultiple(
 				tableDescs[id] = descsToUpdate[id]
 			}
 
-			// Write the updated descriptors.
-			if err := txn.SetSystemConfigTrigger(); err != nil {
-				return err
-			}
 			b := txn.NewBatch()
 			for tableID, tableDesc := range tableDescs {
 				if err := writeDescToBatch(ctx, false /* kvTrace */, s.settings, b, tableID, tableDesc.TableDesc()); err != nil {
@@ -471,6 +478,8 @@ func (s LeaseStore) PublishMultiple(
 // not have side effects.
 //
 // Returns the updated version of the descriptor.
+// TODO (lucy): Maybe have the closure take a *client.Txn to match
+// PublishMultiple.
 func (s LeaseStore) Publish(
 	ctx context.Context,
 	tableID sqlbase.ID,
@@ -478,7 +487,7 @@ func (s LeaseStore) Publish(
 	logEvent func(*client.Txn) error,
 ) (*sqlbase.ImmutableTableDescriptor, error) {
 	tableIDs := []sqlbase.ID{tableID}
-	updates := func(descs map[sqlbase.ID]*sqlbase.MutableTableDescriptor) error {
+	updates := func(_ *client.Txn, descs map[sqlbase.ID]*sqlbase.MutableTableDescriptor) error {
 		desc, ok := descs[tableID]
 		if !ok {
 			return errors.AssertionFailedf("required table with ID %d not provided to update closure", tableID)

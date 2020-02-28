@@ -255,7 +255,10 @@ func (n *createTableNode) startExec(params runParams) error {
 	}
 
 	for _, updated := range affected {
-		if err := params.p.writeSchemaChange(params.ctx, updated, sqlbase.InvalidMutationID); err != nil {
+		// TODO (lucy): Have more consistent/informative names for dependent jobs.
+		if err := params.p.writeSchemaChange(
+			params.ctx, updated, sqlbase.InvalidMutationID, "updating referenced table",
+		); err != nil {
 			return err
 		}
 	}
@@ -483,7 +486,11 @@ func (p *planner) MaybeUpgradeDependentOldForeignKeyVersionTables(
 			return err
 		}
 		if didUpgrade {
-			err := p.writeSchemaChange(ctx, sqlbase.NewMutableExistingTableDescriptor(*tbl), sqlbase.InvalidMutationID)
+			// TODO (lucy): Have more consistent/informative names for dependent jobs.
+			err := p.writeSchemaChange(
+				ctx, sqlbase.NewMutableExistingTableDescriptor(*tbl), sqlbase.InvalidMutationID,
+				"updating foreign key references on table",
+			)
 			if err != nil {
 				return err
 			}
@@ -938,14 +945,20 @@ func (p *planner) finalizeInterleave(
 	ancestorIndex.InterleavedBy = append(ancestorIndex.InterleavedBy,
 		sqlbase.ForeignKeyReference{Table: desc.ID, Index: index.ID})
 
-	if err := p.writeSchemaChange(ctx, ancestorTable, sqlbase.InvalidMutationID); err != nil {
+	// TODO (lucy): Have more consistent/informative names for dependent jobs.
+	if err := p.writeSchemaChange(
+		ctx, ancestorTable, sqlbase.InvalidMutationID, "updating ancestor table",
+	); err != nil {
 		return err
 	}
 
 	if desc.State == sqlbase.TableDescriptor_ADD {
 		desc.State = sqlbase.TableDescriptor_PUBLIC
 
-		if err := p.writeSchemaChange(ctx, desc, sqlbase.InvalidMutationID); err != nil {
+		// No job description, since this is presumably part of some larger schema change.
+		if err := p.writeSchemaChange(
+			ctx, desc, sqlbase.InvalidMutationID, "",
+		); err != nil {
 			return err
 		}
 	}

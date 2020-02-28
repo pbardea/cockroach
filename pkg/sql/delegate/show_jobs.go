@@ -53,7 +53,7 @@ func (d *delegator) delegateShowJobs(n *tree.ShowJobs) (tree.Statement, error) {
 			`SELECT * FROM [%s]
 			 WHERE
 			    IF(finished IS NULL,
-			      IF(pg_sleep(1), crdb_internal.force_retry('24h'), 0),
+			      IF(pg_sleep(0.01), crdb_internal.force_retry('24h'), 0),
 			      0
 			    ) = 0`, sqlStmt)
 	}
