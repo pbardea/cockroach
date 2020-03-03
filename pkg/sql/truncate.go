@@ -19,7 +19,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
-	"github.com/cockroachdb/cockroach/pkg/sql/row"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlbase"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
@@ -504,53 +503,5 @@ func reassignIndexComment(
 		}
 	}
 
-	return nil
-}
-
-// truncateTableInChunks truncates the data of a table in chunks. It deletes a
-// range of data for the table, which includes the PK and all indexes.
-// The table has already been marked for deletion and has been purged from the
-// descriptor cache on all nodes.
-//
-// TODO(vivek): No node is reading/writing data on the table at this stage,
-// therefore the entire table can be deleted with no concern for conflicts (we
-// can even eliminate the need to use a transaction for each chunk at a later
-// stage if it proves inefficient).
-func truncateTableInChunks(
-	ctx context.Context, tableDesc *sqlbase.TableDescriptor, db *client.DB, traceKV bool,
-) error {
-	const chunkSize = TableTruncateChunkSize
-	var resume roachpb.Span
-	alloc := &sqlbase.DatumAlloc{}
-	for rowIdx, done := 0, false; !done; rowIdx += chunkSize {
-		resumeAt := resume
-		if traceKV {
-			log.VEventf(ctx, 2, "table %s truncate at row: %d, span: %s", tableDesc.Name, rowIdx, resume)
-		}
-		if err := db.Txn(ctx, func(ctx context.Context, txn *client.Txn) error {
-			rd, err := row.MakeDeleter(
-				ctx,
-				txn,
-				sqlbase.NewImmutableTableDescriptor(*tableDesc),
-				nil,
-				nil,
-				row.SkipFKs,
-				nil, /* *tree.EvalContext */
-				alloc,
-			)
-			if err != nil {
-				return err
-			}
-			td := tableDeleter{rd: rd, alloc: alloc}
-			if err := td.init(ctx, txn, nil /* *tree.EvalContext */); err != nil {
-				return err
-			}
-			resume, err = td.deleteAllRows(ctx, resumeAt, chunkSize, traceKV)
-			return err
-		}); err != nil {
-			return err
-		}
-		done = resume.Key == nil
-	}
 	return nil
 }
