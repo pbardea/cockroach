@@ -211,10 +211,6 @@ func (e errTableVersionMismatch) Error() string {
 	return fmt.Sprintf("table version mismatch: %d, expected: %d", e.version, e.expected)
 }
 
-func (sc *SchemaChanger) canClearRangeForDrop(index *sqlbase.IndexDescriptor) bool {
-	return !index.IsInterleaved()
-}
-
 // DropTableDesc removes a descriptor from the KV database.
 func (sc *SchemaChanger) DropTableDesc(
 	ctx context.Context, tableDesc *sqlbase.TableDescriptor, traceKV bool,
@@ -270,7 +266,10 @@ func (sc *SchemaChanger) DropTableDesc(
 func (sc *SchemaChanger) truncateTable(ctx context.Context, table *sqlbase.TableDescriptor) error {
 	// If DropTime isn't set, assume this drop request is from a version
 	// 1.1 server and invoke legacy code that uses DeleteRange and range GC.
-	if table.DropTime == 0 {
+	// TODO(pbardea): Note that we never set the drop time for interleaved tables,
+	// but this check was added to be more explicit about it. This should get
+	// cleaned up.
+	if table.DropTime == 0 || table.IsInterleaved() {
 		return truncateTableInChunks(ctx, table, sc.db, false /* traceKV */)
 	}
 
@@ -1097,7 +1096,7 @@ func (sc *SchemaChanger) done(ctx context.Context) (*sqlbase.ImmutableTableDescr
 			isRollback = mutation.Rollback
 			if indexDesc := mutation.GetIndex(); mutation.Direction == sqlbase.DescriptorMutation_DROP &&
 				indexDesc != nil {
-				if sc.canClearRangeForDrop(indexDesc) {
+				if canClearRangeForDrop(indexDesc) {
 					scDesc.GCMutations = append(
 						scDesc.GCMutations,
 						sqlbase.TableDescriptor_GCDescriptorMutation{
