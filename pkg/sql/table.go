@@ -800,6 +800,7 @@ type tableCollectionModifier interface {
 func (p *planner) createDropDatabaseJob(
 	ctx context.Context,
 	databaseID sqlbase.ID,
+	databaseName string,
 	droppedDetails []jobspb.DroppedTableDetails,
 	jobDesc string,
 ) error {
@@ -814,8 +815,9 @@ func (p *planner) createDropDatabaseJob(
 		Username:      p.User(),
 		DescriptorIDs: descriptorIDs,
 		Details: jobspb.SchemaChangeDetails{
-			DroppedTables:     droppedDetails,
-			DroppedDatabaseID: databaseID,
+			DroppedTables:       droppedDetails,
+			DroppedDatabaseID:   databaseID,
+			DroppedDatabaseName: databaseName,
 		},
 		Progress: jobspb.SchemaChangeProgress{},
 	}

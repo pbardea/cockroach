@@ -37,7 +37,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
-	opentracing "github.com/opentracing/opentracing-go"
+	"github.com/opentracing/opentracing-go"
 )
 
 const defaultLeniencySetting = 60 * time.Second
@@ -217,6 +217,15 @@ func (r *Registry) makeCtx() (context.Context, func()) {
 
 func (r *Registry) makeJobID() int64 {
 	return int64(builtins.GenerateUniqueInt(r.nodeID.Get()))
+}
+
+func (r *Registry) PokeAdoptionCh(ctx context.Context) error {
+	select {
+	case r.adoptionCh <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
 }
 
 // CreateAndStartJob creates and asynchronously starts a job from record. An

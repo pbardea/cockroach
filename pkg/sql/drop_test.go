@@ -15,7 +15,6 @@ import (
 	gosql "database/sql"
 	"fmt"
 	"math/rand"
-	"sync/atomic"
 	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
@@ -29,6 +28,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/server"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
+	_ "github.com/cockroachdb/cockroach/pkg/sql/gcjob"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlbase"
 	"github.com/cockroachdb/cockroach/pkg/sql/tests"
 	"github.com/cockroachdb/cockroach/pkg/sqlmigrations"
@@ -382,7 +382,6 @@ INSERT INTO t.kv2 VALUES ('c', 'd'), ('a', 'b'), ('e', 'a');
 		t.Fatal(err)
 	}
 
-	t.Skip("skipping last portion of test until schema change GC job is implemented")
 	// Push a new zone config for the table with TTL=0 so the data is
 	// deleted immediately.
 	if _, err := addImmediateGCZoneConfig(sqlDB, tbDesc.ID); err != nil {
@@ -406,9 +405,11 @@ INSERT INTO t.kv2 VALUES ('c', 'd'), ('a', 'b'), ('e', 'a');
 		t.Fatal(err)
 	}
 
-	if err := jobutils.VerifyRunningSystemJob(t, sqlRun, 0, jobspb.TypeSchemaChange, sql.RunningStatusWaitingGC, jobs.Record{
+	curJobs := sqlRun.QueryStr(t, "SELECT * FROM system.jobs")
+	fmt.Println(curJobs)
+	if err := jobutils.VerifySystemJob(t, sqlRun, 0, jobspb.TypeWaitingForGC, jobs.StatusRunning, jobs.Record{
 		Username:    security.RootUser,
-		Description: "DROP DATABASE t CASCADE",
+		Description: "GC DATABASE t",
 		DescriptorIDs: sqlbase.IDs{
 			tbDesc.ID, tb2Desc.ID,
 		},
@@ -565,7 +566,6 @@ func TestDropIndex(t *testing.T) {
 	tests.CheckKeyCount(t, kvDB, newIdxSpan, numRows)
 	tests.CheckKeyCount(t, kvDB, tableDesc.TableSpan(), 4*numRows)
 
-	t.Skip("skipping last portion of test until schema change GC job is implemented")
 	clearIndexAttempt = true
 	// Add a zone config for the table.
 	if _, err := addImmediateGCZoneConfig(sqlDB, tableDesc.ID); err != nil {
@@ -661,7 +661,6 @@ func TestDropIndexInterleaved(t *testing.T) {
 	params, _ := tests.CreateTestServerParams()
 	params.Knobs = base.TestingKnobs{
 		SQLSchemaChanger: &sql.SchemaChangerTestingKnobs{
-			// TODO (lucy): Un-skip this test when the GC job is implemented.
 			BackfillChunkSize: chunkSize,
 		},
 	}
@@ -679,7 +678,6 @@ func TestDropIndexInterleaved(t *testing.T) {
 	if _, err := sqlDB.Exec(`DROP INDEX t.intlv@intlv_idx`); err != nil {
 		t.Fatal(err)
 	}
-	t.Skip("skipping last portion of test until schema change GC job is implemented")
 	tests.CheckKeyCount(t, kvDB, tableSpan, 2*numRows)
 
 	// Ensure that index is not active.
@@ -838,7 +836,6 @@ func TestDropTableDeleteData(t *testing.T) {
 		}
 	}
 
-	t.Skip("skipping last portion of test until schema change GC job is implemented")
 	// The closure pushes a zone config reducing the TTL to 0 for descriptor i.
 	pushZoneCfg := func(i int) {
 		if _, err := addImmediateGCZoneConfig(sqlDB, descs[i].ID); err != nil {
@@ -861,6 +858,17 @@ func TestDropTableDeleteData(t *testing.T) {
 		if err := jobutils.VerifySystemJob(t, sqlRun, 2*i+1, jobspb.TypeSchemaChange, jobs.StatusSucceeded, jobs.Record{
 			Username:    security.RootUser,
 			Description: fmt.Sprintf(`DROP TABLE t.public.%s`, descs[i].GetName()),
+			DescriptorIDs: sqlbase.IDs{
+				descs[i].ID,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Ensure that the job is marked as succeeded.
+		if err := jobutils.VerifySystemJob(t, sqlRun, 2*i+1, jobspb.TypeWaitingForGC, jobs.StatusSucceeded, jobs.Record{
+			Username:    security.RootUser,
+			Description: fmt.Sprintf(`GC TABLE t.public.%s`, descs[i].GetName()),
 			DescriptorIDs: sqlbase.IDs{
 				descs[i].ID,
 			},
@@ -916,16 +924,8 @@ func TestDropTableWhileUpgradingFormat(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	ctx := context.Background()
 
-	blockSchemaChanges := make(chan struct{})
 	params, _ := tests.CreateTestServerParams()
 	params.Knobs = base.TestingKnobs{
-		SQLSchemaChanger: &sql.SchemaChangerTestingKnobs{
-			SchemaChangeJobNoOp: func() bool {
-				return true
-			},
-			// TODO (lucy): Un-skip this test when the GC job is implemented, and set
-			// the knob to block until we're ready to GC
-		},
 		SQLMigrationManager: &sqlmigrations.MigrationManagerTestingKnobs{
 			DisableBackfillMigrations: true,
 		},
@@ -937,9 +937,6 @@ func TestDropTableWhileUpgradingFormat(t *testing.T) {
 
 	const numRows = 100
 	sqlutils.CreateTable(t, sqlDBRaw, "t", "a INT", numRows, sqlutils.ToRowFn(sqlutils.RowIdxFn))
-
-	// Set TTL so the data is deleted immediately.
-	sqlDB.Exec(t, `ALTER TABLE test.t CONFIGURE ZONE USING gc.ttlseconds = 1`)
 
 	// Give the table an old format version.
 	tableDesc := sqlbase.GetTableDescriptor(kvDB, "test", "t")
@@ -956,7 +953,11 @@ func TestDropTableWhileUpgradingFormat(t *testing.T) {
 
 	// Simulate a migration upgrading the table descriptor's format version after
 	// the table has been dropped but before the truncation has occurred.
-	tableDesc = sqlbase.GetTableDescriptor(kvDB, "test", "t")
+	var err error
+	tableDesc, err = sqlbase.GetTableDescFromID(ctx, kvDB.NewTxn(ctx, ""), tableDesc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !tableDesc.Dropped() {
 		t.Fatalf("expected descriptor to be in DROP state, but was in %s", tableDesc.State)
 	}
@@ -966,10 +967,13 @@ func TestDropTableWhileUpgradingFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Skip("skipping last portion of test until schema change GC job is implemented")
+	// Set TTL so the data is deleted immediately.
+	if _, err := addImmediateGCZoneConfig(sqlDBRaw, tableDesc.ID); err != nil {
+		t.Fatal(err)
+	}
+
 	// Allow the schema change to proceed and verify that the data is eventually
 	// deleted, despite the interleaved modification to the table descriptor.
-	close(blockSchemaChanges)
 	testutils.SucceedsSoon(t, func() error {
 		return descExists(sqlDBRaw, false, tableDesc.ID)
 	})
@@ -981,13 +985,6 @@ func TestDropTableWhileUpgradingFormat(t *testing.T) {
 func TestDropTableInterleavedDeleteData(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	params, _ := tests.CreateTestServerParams()
-	var enableAsync uint32
-	params.Knobs = base.TestingKnobs{
-		SQLSchemaChanger: &sql.SchemaChangerTestingKnobs{
-			// TODO (lucy): Un-skip this test when the GC job is implemented, and set
-			// the knob to block until we're ready to GC
-		},
-	}
 	s, sqlDB, kvDB := serverutils.StartServer(t, params)
 	defer s.Stopper().Stop(context.TODO())
 
@@ -1011,8 +1008,9 @@ func TestDropTableInterleavedDeleteData(t *testing.T) {
 		t.Fatalf("different error than expected: %v", err)
 	}
 
-	t.Skip("skipping last portion of test until schema change GC job is implemented")
-	atomic.StoreUint32(&enableAsync, 1)
+	if _, err := addImmediateGCZoneConfig(sqlDB, tableDescInterleaved.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	testutils.SucceedsSoon(t, func() error {
 		return descExists(sqlDB, false, tableDescInterleaved.ID)

@@ -12,6 +12,7 @@ package gcjob
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/internal/client"
@@ -27,7 +28,7 @@ import (
 var (
 	// MaxSQLGCInterval is the longest the polling interval between checking if
 	// elements should be GC'd.
-	MaxSQLGCInterval = 5 * time.Minute
+	MaxSQLGCInterval = 5 * time.Millisecond
 )
 
 type waitForGCResumer struct {
@@ -40,6 +41,8 @@ func performGC(
 	details *jobspb.WaitingForGCDetails,
 	progress *jobspb.WaitingForGCProgress,
 ) error {
+	fmt.Println("pbardea: progress")
+	fmt.Printf("%+v]n", progress)
 	if details.Indexes != nil {
 		if err := gcIndexes(ctx, execCfg, details.ParentID, progress); err != nil {
 			return err
@@ -68,7 +71,11 @@ func (r waitForGCResumer) Resume(
 	// zone config changes.
 	p := phs.(sql.PlanHookState)
 	// TODO(pbardea): Wait for no versions.
+	fmt.Println("pbardea: debugging")
 	execCfg := p.ExecCfg()
+	if fn := execCfg.GCJobTestingKnobs.RunBeforeResume; fn != nil {
+		fn()
+	}
 	details, progress, err := initDetailsAndProgress(ctx, execCfg, r.jobID)
 	if err != nil {
 		return err

@@ -1083,7 +1083,6 @@ INSERT INTO t.kv VALUES ('a', 'b');
 	tableSpan := tableDesc.TableSpan()
 	tests.CheckKeyCount(t, kvDB, tableSpan, 4)
 
-	t.Skip("skipping last portion of test until schema change GC job is implemented")
 	// Allow async schema change waiting for GC to complete (when dropping an
 	// index) and clear the index keys.
 	if _, err := addImmediateGCZoneConfig(sqlDB, tableDesc.ID); err != nil {

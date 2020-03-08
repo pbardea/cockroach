@@ -139,7 +139,7 @@ func (n *dropDatabaseNode) startExec(params runParams) error {
 		tableDescs = append(tableDescs, toDel.desc)
 	}
 	if err := p.createDropDatabaseJob(
-		ctx, n.dbDesc.ID, droppedTableDetails, tree.AsStringWithFQNames(n.n, params.Ann()),
+		ctx, n.dbDesc.ID, n.dbDesc.Name, droppedTableDetails, tree.AsStringWithFQNames(n.n, params.Ann()),
 	); err != nil {
 		return err
 	}

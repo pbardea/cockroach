@@ -83,11 +83,12 @@ type droppedIndex struct {
 
 // SchemaChanger is used to change the schema on a table.
 type SchemaChanger struct {
-	tableID    sqlbase.ID
-	mutationID sqlbase.MutationID
-	nodeID     roachpb.NodeID
-	db         *client.DB
-	leaseMgr   *LeaseManager
+	tableID           sqlbase.ID
+	mutationID        sqlbase.MutationID
+	droppedDatabaseID sqlbase.ID
+	nodeID            roachpb.NodeID
+	db                *client.DB
+	leaseMgr          *LeaseManager
 
 	// TODO (lucy): Replace this with job state once we have a GC job. This is
 	// only still here because the (currently unused) MaybeGCMutations depends on
@@ -689,6 +690,37 @@ func (sc *SchemaChanger) drainNames(ctx context.Context) error {
 	return err
 }
 
+func (sc *SchemaChanger) startGCJobForTableDrop(
+	ctx context.Context, tableDesc *sqlbase.TableDescriptor,
+) error {
+	now := timeutil.Now().UnixNano()
+
+	if err := sc.db.Txn(ctx, func(ctx context.Context, txn *client.Txn) error {
+		jobRecord := jobs.Record{
+			Description:   fmt.Sprintf("GC TABLE %s", tableDesc.Name),
+			Username:      sc.job.Payload().Username,
+			DescriptorIDs: sqlbase.IDs{tableDesc.ID},
+			Details: jobspb.WaitingForGCDetails{
+				Tables: []jobspb.WaitingForGCDetails_DroppedID{
+					{
+						ID:       tableDesc.ID,
+						DropTime: now,
+					},
+				},
+				ParentID: sc.tableID,
+			},
+			Progress: jobspb.WaitingForGCProgress{},
+		}
+		if _, err := sc.jobRegistry.CreateJobWithTxn(ctx, jobRecord, txn); err != nil {
+			return err
+		}
+		return sc.jobRegistry.PokeAdoptionCh(ctx)
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
 // Execute the entire schema change in steps.
 // inSession is set to false when this is called from the asynchronous
 // schema change execution path.
@@ -722,6 +754,13 @@ func (sc *SchemaChanger) exec(ctx context.Context) error {
 		}
 	} else {
 		log.Infof(ctx, "not draining names")
+	}
+
+	if tableDesc.Dropped() && sc.droppedDatabaseID == sqlbase.InvalidID {
+		// We've dropped this table, let's kick off a GC job.
+		if err = sc.startGCJobForTableDrop(ctx, tableDesc); err != nil {
+			return err
+		}
 	}
 
 	// TODO (lucy): Skip table GC for now so we can return results to the client
@@ -1013,8 +1052,10 @@ func (sc *SchemaChanger) waitToUpdateLeases(ctx context.Context, tableID sqlbase
 // done finalizes the mutations (adds new cols/indexes to the table).
 // It ensures that all nodes are on the current (pre-update) version of the
 // schema.
+// It also kicks off GC jobs as needed.
 // Returns the updated descriptor.
 func (sc *SchemaChanger) done(ctx context.Context) (*sqlbase.ImmutableTableDescriptor, error) {
+	fmt.Println("pbardea: done")
 	isRollback := false
 	now := timeutil.Now().UnixNano()
 
@@ -1096,14 +1137,38 @@ func (sc *SchemaChanger) done(ctx context.Context) (*sqlbase.ImmutableTableDescr
 			isRollback = mutation.Rollback
 			if indexDesc := mutation.GetIndex(); mutation.Direction == sqlbase.DescriptorMutation_DROP &&
 				indexDesc != nil {
+				fmt.Println("pbardea: dropping index")
 				if canClearRangeForDrop(indexDesc) {
+					fmt.Println("pbardea: can clear range")
 					scDesc.GCMutations = append(
 						scDesc.GCMutations,
 						sqlbase.TableDescriptor_GCDescriptorMutation{
 							IndexID:  indexDesc.ID,
 							DropTime: now,
-							JobID:    *sc.job.ID(),
 						})
+
+					jobRecord := jobs.Record{
+						Description:   fmt.Sprintf("GC INDEX %s", indexDesc.Name),
+						Username:      sc.job.Payload().Username,
+						DescriptorIDs: sqlbase.IDs{scDesc.GetID()},
+						Details: jobspb.WaitingForGCDetails{
+							Indexes: []jobspb.WaitingForGCDetails_DroppedIndex{
+								{
+									IndexID:  indexDesc.ID,
+									DropTime: now,
+								},
+							},
+							ParentID: sc.tableID,
+						},
+						Progress: jobspb.WaitingForGCProgress{},
+					}
+					_, err := sc.jobRegistry.CreateJobWithTxn(ctx, jobRecord, txn)
+					if err != nil {
+						return err
+					}
+					if err := sc.jobRegistry.PokeAdoptionCh(ctx); err != nil {
+						return err
+					}
 				}
 			}
 			if constraint := mutation.GetConstraint(); constraint != nil &&
@@ -1636,6 +1701,15 @@ func (sc *SchemaChanger) reverseMutation(
 	return mutation, columns
 }
 
+// Note that this is defined here for testing purposes to avoid cyclic
+// dependencies.
+type GCJobTestingKnobs struct {
+	RunBeforeResume func()
+}
+
+// ModuleTestingKnobs is part of the base.ModuleTestingKnobs interface.
+func (*GCJobTestingKnobs) ModuleTestingKnobs() {}
+
 // SyncSchemaChangersFilter is the type of a hook to be installed through the
 // ExecutorContext for blocking or otherwise manipulating schema changers run
 // through the sync schema changers path.
@@ -1758,6 +1832,46 @@ type SchemaChangeResumer struct {
 	job *jobs.Job
 }
 
+func startGCDatabaseJob(
+	ctx context.Context,
+	execCfg *ExecutorConfig,
+	username string,
+	databaseID sqlbase.ID,
+	databaseName string,
+	tables []jobspb.DroppedTableDetails,
+) error {
+	now := timeutil.Now().UnixNano()
+
+	tableIDs := make([]sqlbase.ID, len(tables))
+	for i, table := range tables {
+		tableIDs[i] = table.ID
+	}
+	tableDetails := make([]jobspb.WaitingForGCDetails_DroppedID, len(tables))
+	for i, tableID := range tableIDs {
+		tableDetails[i] = jobspb.WaitingForGCDetails_DroppedID{ID: tableID, DropTime: now}
+	}
+
+	if err := execCfg.DB.Txn(ctx, func(ctx context.Context, txn *client.Txn) error {
+		jobRecord := jobs.Record{
+			Description:   fmt.Sprintf("GC DATABASE %s", databaseName),
+			Username:      username,
+			DescriptorIDs: tableIDs,
+			Details: jobspb.WaitingForGCDetails{
+				Tables:   tableDetails,
+				ParentID: databaseID,
+			},
+			Progress: jobspb.WaitingForGCProgress{},
+		}
+		if _, err := execCfg.JobRegistry.CreateJobWithTxn(ctx, jobRecord, txn); err != nil {
+			return err
+		}
+		return execCfg.JobRegistry.PokeAdoptionCh(ctx)
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (r SchemaChangeResumer) Resume(
 	ctx context.Context, phs interface{}, resultsCh chan<- tree.Datums,
 ) error {
@@ -1768,10 +1882,11 @@ func (r SchemaChangeResumer) Resume(
 		return nil
 	}
 
-	execSchemaChange := func(tableID sqlbase.ID, mutationID sqlbase.MutationID) error {
+	execSchemaChange := func(tableID sqlbase.ID, mutationID sqlbase.MutationID, droppedDatabaseID sqlbase.ID) error {
 		sc := SchemaChanger{
 			tableID:              tableID,
 			mutationID:           mutationID,
+			droppedDatabaseID:    droppedDatabaseID,
 			nodeID:               p.ExecCfg().NodeID.Get(),
 			db:                   p.ExecCfg().DB,
 			leaseMgr:             p.ExecCfg().LeaseManager,
@@ -1812,7 +1927,17 @@ func (r SchemaChangeResumer) Resume(
 	if details.DroppedDatabaseID != sqlbase.InvalidID {
 		for i := range details.DroppedTables {
 			droppedTable := &details.DroppedTables[i]
-			if err := execSchemaChange(droppedTable.ID, sqlbase.InvalidMutationID); err != nil {
+			if err := execSchemaChange(droppedTable.ID, sqlbase.InvalidMutationID, details.DroppedDatabaseID); err != nil {
+				return err
+			}
+			if err := startGCDatabaseJob(
+				ctx,
+				p.ExecCfg(),
+				r.job.Payload().Username,
+				details.DroppedDatabaseID,
+				details.DroppedDatabaseName,
+				details.DroppedTables,
+			); err != nil {
 				return err
 			}
 		}
@@ -1821,7 +1946,7 @@ func (r SchemaChangeResumer) Resume(
 	if details.TableID == sqlbase.InvalidID {
 		return errors.AssertionFailedf("job %d has no database ID or table ID", r.job.ID())
 	}
-	return execSchemaChange(details.TableID, details.MutationID)
+	return execSchemaChange(details.TableID, details.MutationID, details.DroppedDatabaseID)
 }
 
 func (r SchemaChangeResumer) OnSuccess(ctx context.Context, txn *client.Txn) error {
