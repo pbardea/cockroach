@@ -271,6 +271,23 @@ func generateInterleavedData(
 	return totalRows, tableNames
 }
 
+func getFirstStoreReplica(
+	t *testing.T, s serverutils.TestServerInterface, key roachpb.Key,
+) (*kvserver.Store, *kvserver.Replica) {
+	t.Helper()
+	store, err := s.GetStores().(*kvserver.Stores).GetStore(s.GetFirstStoreID())
+	require.NoError(t, err)
+	var repl *kvserver.Replica
+	testutils.SucceedsSoon(t, func() error {
+		repl = store.LookupReplica(roachpb.RKey(key))
+		if repl == nil {
+			return errors.New(`could not find replica`)
+		}
+		return nil
+	})
+	return store, repl
+}
+
 func TestBackupRestoreStatementResult(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
@@ -3690,21 +3707,4 @@ func TestProtectedTimestampsDuringBackup(t *testing.T) {
 		}
 		return nil
 	})
-}
-
-func getFirstStoreReplica(
-	t *testing.T, s serverutils.TestServerInterface, key roachpb.Key,
-) (*kvserver.Store, *kvserver.Replica) {
-	t.Helper()
-	store, err := s.GetStores().(*kvserver.Stores).GetStore(s.GetFirstStoreID())
-	require.NoError(t, err)
-	var repl *kvserver.Replica
-	testutils.SucceedsSoon(t, func() error {
-		repl = store.LookupReplica(roachpb.RKey(key))
-		if repl == nil {
-			return errors.New(`could not find replica`)
-		}
-		return nil
-	})
-	return store, repl
 }
