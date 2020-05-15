@@ -238,6 +238,133 @@ func TestDisallowFullClusterRestoreOfNonFullBackup(t *testing.T) {
 	)
 }
 
+// TestFullClusteRestoreWithTablesCreatedBefore primarily exercises that
+// checks for DescIDGenerator are performed properly before restore, and that
+// the generator is properly restored.
+func TestFullClusteRestoreWithTablesCreatedBefore(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	const numAccounts = 10
+	_, _, sqlDB, tempDir, cleanupFn := backupRestoreTestSetup(t, singleNode, numAccounts, initNone)
+	_, _, sqlDBRestore, cleanupEmptyCluster := backupRestoreTestSetupEmpty(t, singleNode, tempDir, initNone)
+	defer cleanupFn()
+	defer cleanupEmptyCluster()
+
+	_, tablesToCheck := generateInterleavedData(sqlDB, t, numAccounts)
+
+	sqlDB.Exec(t, `BACKUP TO $1`, localFoo)
+	// Create and drop a bunch of databases to inflate the DescIDGenerator on
+	// the restoring cluster.
+	for i := 0; i < 200; i++ {
+		sqlDBRestore.Exec(t, `CREATE DATABASE db_to_drop`)
+		sqlDBRestore.Exec(t, `DROP DATABASE db_to_drop`)
+	}
+
+	sqlDBRestore.Exec(t, `CREATE DATABASE db_with_table`)
+	sqlDBRestore.Exec(t, `CREATE TABLE db_with_table.my_table (a int)`)
+	sqlDBRestore.Exec(t, `INSERT INTO db_with_table.my_table VALUES (1), (2)`)
+	// Full cluster restore will only work if there are no more user table
+	// descriptors, so any created tables must be GC'd.
+	sqlDBRestore.Exec(t, `ALTER TABLE db_with_table.my_table CONFIGURE ZONE USING gc.ttlseconds=1`)
+	sqlDBRestore.Exec(t, `DROP DATABASE db_with_table CASCADE`)
+	// Wait for the table descripttors to be GC'd.
+	sqlDBRestore.CheckQueryResultsRetry(
+		t, "SELECT count(*) FROM [SHOW JOBS] WHERE job_type = 'SCHEMA CHANGE GC' AND status = 'running'",
+		[][]string{{"0"}},
+	)
+	sqlDBRestore.Exec(t, `RESTORE FROM $1`, localFoo)
+	sqlDBRestore.Exec(t, `CREATE DATABASE my_new_db`)
+
+	for _, table := range tablesToCheck {
+		query := fmt.Sprintf("SELECT * FROM data.%s", table)
+		sqlDBRestore.CheckQueryResults(t, query, sqlDB.QueryStr(t, query))
+	}
+	tableIDCheck := "SELECT DISTINCT name, id FROM system.namespace WHERE name <> 'my_new_db'"
+	sqlDBRestore.CheckQueryResults(t, tableIDCheck, sqlDB.QueryStr(t, tableIDCheck))
+	// t.Fatal("logs")
+}
+
+// // TestFullClusteRestoreWithTablesCreatedBeforeAndAfter primarily exercises that
+// // checks for DescIDGenerator are performed properly before restore, and that
+// // the generator is properly restored.
+// func TestFullClusteRestoreWithTablesCreatedBeforeAndAfter(t *testing.T) {
+// 	defer leaktest.AfterTest(t)()
+
+// 	const numAccounts = 10
+// 	_, _, sqlDB, tempDir, cleanupFn := backupRestoreTestSetup(t, singleNode, numAccounts, initNone)
+// 	_, _, sqlDBRestore, cleanupEmptyCluster := backupRestoreTestSetupEmpty(t, singleNode, tempDir, initNone)
+// 	defer cleanupFn()
+// 	defer cleanupEmptyCluster()
+
+// 	_, tablesToCheck := generateInterleavedData(sqlDB, t, numAccounts)
+
+// 	sqlDB.Exec(t, `BACKUP TO $1`, localFoo)
+// 	// Create and drop a bunch of databases to inflate the DescIDGenerator on
+// 	// the restoring cluster.
+// 	for i := 0; i < 200; i++ {
+// 		sqlDBRestore.Exec(t, `CREATE DATABASE db_to_drop`)
+// 		sqlDBRestore.Exec(t, `DROP DATABASE db_to_drop`)
+// 	}
+
+// 	sqlDBRestore.Exec(t, `CREATE DATABASE db_with_table`)
+// 	sqlDBRestore.Exec(t, `CREATE TABLE db_with_table.my_table (a int)`)
+// 	sqlDBRestore.Exec(t, `INSERT INTO db_with_table.my_table VALUES (1), (2)`)
+// 	// Full cluster restore will only work if there are no more user table
+// 	// descriptors, so any created tables must be GC'd.
+// 	sqlDBRestore.Exec(t, `ALTER TABLE db_with_table.my_table CONFIGURE ZONE USING gc.ttlseconds=1`)
+// 	sqlDBRestore.Exec(t, `DROP DATABASE db_with_table CASCADE`)
+// 	sqlDBRestore.CheckQueryResultsRetry(
+// 		t, "SELECT count(*) FROM [SHOW JOBS] WHERE job_type = 'SCHEMA CHANGE GC' AND status = 'succeeded'",
+// 		[][]string{{"1"}},
+// 	)
+// 	sqlDBRestore.Exec(t, `RESTORE FROM $1`, localFoo)
+
+// 	sqlDBRestore.Exec(t, "CREATE DATABASE my_new_db")
+// 	// sqlDBRestore.Exec(t, "CREATE TABLE my_new_db.my_new_table_to_drop (a int)")
+// 	// sqlDBRestore.Exec(t, "DROP TABLE my_new_db.my_new_table_to_drop")
+// 	// sqlDBRestore.Exec(t, "CREATE TABLE my_new_db.my_new_table (a int)")
+
+// 	for _, table := range tablesToCheck {
+// 		query := fmt.Sprintf("SELECT * FROM data.%s", table)
+// 		sqlDBRestore.CheckQueryResults(t, query, sqlDB.QueryStr(t, query))
+// 	}
+// 	tableIDCheck := "SELECT DISTINCT name, id FROM system.namespace WHERE name <> 'my_new_db'"
+// 	sqlDBRestore.CheckQueryResults(t, tableIDCheck, sqlDB.QueryStr(t, tableIDCheck))
+// }
+
+// // TestFullClusteRestoreWithTablesCreatedAfter primarily exercises that
+// // checks for DescIDGenerator are performed properly before restore, and that
+// // the generator is properly restored.
+// func TestFullClusteRestoreWithTablesCreatedAfter(t *testing.T) {
+// 	defer leaktest.AfterTest(t)()
+
+// 	const numAccounts = 10
+// 	_, _, sqlDB, tempDir, cleanupFn := backupRestoreTestSetup(t, singleNode, numAccounts, initNone)
+// 	_, _, sqlDBRestore, cleanupEmptyCluster := backupRestoreTestSetupEmpty(t, singleNode, tempDir, initNone)
+// 	defer cleanupFn()
+// 	defer cleanupEmptyCluster()
+
+// 	_, tablesToCheck := generateInterleavedData(sqlDB, t, numAccounts)
+
+// 	sqlDB.Exec(t, `BACKUP TO $1`, localFoo)
+// 	// Create and drop a bunch of databases to inflate the DescIDGenerator on
+// 	// the restoring cluster.
+// 	sqlDBRestore.Exec(t, `RESTORE FROM $1`, localFoo)
+
+// 	sqlDBRestore.Exec(t, "CREATE DATABASE my_new_db")
+// 	// sqlDBRestore.Exec(t, "CREATE TABLE my_new_db.my_new_table_to_drop (a int)")
+// 	// sqlDBRestore.Exec(t, "DROP TABLE my_new_db.my_new_table_to_drop")
+// 	// sqlDBRestore.Exec(t, "CREATE TABLE my_new_db.my_new_table (a int)")
+
+// 	for _, table := range tablesToCheck {
+// 		query := fmt.Sprintf("SELECT * FROM data.%s", table)
+// 		sqlDBRestore.CheckQueryResults(t, query, sqlDB.QueryStr(t, query))
+// 	}
+// 	tableIDCheck := "SELECT DISTINCT name, id FROM system.namespace WHERE name <> 'my_new_db'"
+// 	sqlDBRestore.CheckQueryResults(t, tableIDCheck, sqlDB.QueryStr(t, tableIDCheck))
+// 	// t.Fatal("logs")
+// }
+
 func TestAllowNonFullClusterRestoreOfFullBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 

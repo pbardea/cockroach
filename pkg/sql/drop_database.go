@@ -218,6 +218,8 @@ func (n *dropDatabaseNode) startExec(params runParams) error {
 	}
 	b.Del(descKey)
 
+	// TOOD(pbardea): This is a hack until the proper fix merges.
+	schemasToDelete := append(n.schemasToDelete, "public")
 	for _, schemaToDelete := range n.schemasToDelete {
 		if err := sqlbase.RemoveSchemaNamespaceEntry(
 			ctx,

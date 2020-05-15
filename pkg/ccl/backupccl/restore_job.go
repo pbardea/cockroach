@@ -469,7 +469,7 @@ func WriteTableDescs(
 				parentDB, err := sqlbase.GetDatabaseDescFromID(ctx, txn, keys.SystemSQLCodec, tables[i].ParentID)
 				if err != nil {
 					return errors.Wrapf(err,
-						"failed to lookup parent DB %d", errors.Safe(tables[i].ParentID))
+						"failed to lookup parent DB %+v %d", tables[i], errors.Safe(tables[i].ParentID))
 				}
 				// We don't check priv's here since we checked them during job planning.
 

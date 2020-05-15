@@ -1450,6 +1450,7 @@ func (sc *SchemaChanger) reverseMutation(
 func CreateGCJobRecord(
 	originalDescription string, username string, details jobspb.SchemaChangeGCDetails,
 ) jobs.Record {
+	log.Infof(context.TODO(), "created gc job record %+v", details)
 	descriptorIDs := make([]sqlbase.ID, 0)
 	if len(details.Indexes) > 0 {
 		if len(descriptorIDs) == 0 {

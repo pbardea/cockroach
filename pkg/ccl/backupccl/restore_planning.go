@@ -32,6 +32,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/storage/cloud"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/errors"
@@ -141,6 +142,9 @@ func allocateTableRewrites(
 	tableRewrites := make(TableRewriteMap)
 	overrideDB, renaming := opts[restoreOptIntoDB]
 
+	log.Infof(ctx, "restorerDBS %+v", restoreDBs)
+	log.Infof(ctx, "dbByID %+v", databasesByID)
+	log.Infof(ctx, "tablesByID %+v", tablesByID)
 	restoreDBNames := make(map[string]*sqlbase.DatabaseDescriptor, len(restoreDBs))
 	for _, db := range restoreDBs {
 		restoreDBNames[db.Name] = db
@@ -196,31 +200,40 @@ func allocateTableRewrites(
 	var tempSysDBID sqlbase.ID
 	if descriptorCoverage == tree.AllDescriptors {
 		var err error
-		numberOfIncrements := maxDescIDInBackup - uint32(sql.MaxDefaultDescriptorID)
-		// We need to increment this key this many times rather than settings
-		// it since the interface does not expect it to be set. See client.Inc()
-		// for more information.
-		// TODO(pbardea): Follow up too see if there is a way to just set this
-		//   since for clusters with many descrirptors we'd want to avoid
-		//   incrementing it 10,000+ times.
-		for i := uint32(0); i <= numberOfIncrements; i++ {
-			_, err = sql.GenerateUniqueDescID(ctx, p.ExecCfg().DB, p.ExecCfg().Codec)
-			if err != nil {
-				return nil, err
-			}
-		}
+		// numberOfIncrements := maxDescIDInBackup - uint32(sql.MaxDefaultDescriptorID)
+		// // We need to increment this key this many times rather than settings
+		// // it since the interface does not expect it to be set. See client.Inc()
+		// // for more information.
+		// // TODO(pbardea): Follow up too see if there is a way to just set this
+		// //   since for clusters with many descrirptors we'd want to avoid
+		// // //   incrementing it 10,000+ times.
+		// for i := uint32(0); i <= numberOfIncrements; i++ {
+		// 	_, err = sql.GenerateUniqueDescID(ctx, p.ExecCfg().DB, p.ExecCfg().Codec)
+		// 	if err != nil {
+		// 		return nil, err
+		// 	}
+		// }
 
 		// Generate one more desc ID for the ID of the temporary system db.
+		if err = p.ExecCfg().DB.Txn(ctx, func(ctx context.Context, txn *kv.Txn) error {
+			b := txn.NewBatch()
+			b.Put(p.ExecCfg().Codec.DescIDSequenceKey(), maxDescIDInBackup+2)
+			return txn.Run(ctx, b)
+		}); err != nil {
+			return nil, err
+		}
 		tempSysDBID, err = sql.GenerateUniqueDescID(ctx, p.ExecCfg().DB, p.ExecCfg().Codec)
 		if err != nil {
 			return nil, err
 		}
+		log.Infof(ctx, "testing 123: %d", tempSysDBID)
 		tableRewrites[tempSysDBID] = &jobspb.RestoreDetails_TableRewrite{TableID: tempSysDBID}
 	}
 
 	// Fail fast if the necessary databases don't exist or are otherwise
 	// incompatible with this restore.
 	if err := p.ExecCfg().DB.Txn(ctx, func(ctx context.Context, txn *kv.Txn) error {
+		// TODO(pbardea): This line looks incorrect.
 		maxExpectedDB := keys.MinUserDescID + sql.MaxDefaultDescriptorID
 		// Check that any DBs being restored do _not_ exist.
 		for name := range restoreDBNames {
