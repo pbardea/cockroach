@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	gosql "database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -20,6 +21,49 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/version"
 	"github.com/cockroachdb/errors"
 )
+
+func fingerprint(ctx context.Context, conn *gosql.DB, db string, asof string) (string, error) {
+	var b strings.Builder
+
+	var tables []string
+	rows, err := conn.QueryContext(
+		ctx,
+		fmt.Sprintf("SELECT table_name FROM [SHOW TABLES FROM %s] ORDER BY table_name", db),
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return "", err
+		}
+		tables = append(tables, name)
+	}
+
+	for _, table := range tables {
+		fmt.Fprintf(&b, "table %s\n", table)
+		query := fmt.Sprintf("SHOW EXPERIMENTAL_FINGERPRINTS FROM TABLE %s.%s", db, table)
+		if asof != "" {
+			query = fmt.Sprintf("SELECT * FROM [%s] AS OF SYSTEM TIME %s", query, asof)
+		}
+		rows, err = conn.QueryContext(ctx, query)
+		if err != nil {
+			return "", err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var name, fp string
+			if err := rows.Scan(&name, &fp); err != nil {
+				return "", err
+			}
+			fmt.Fprintf(&b, "%s: %s\n", name, fp)
+		}
+	}
+
+	return b.String(), rows.Err()
+}
 
 func registerBackup(r *testRegistry) {
 	backup2TBSpec := makeClusterSpec(10)
@@ -190,62 +234,20 @@ func registerBackup(r *testRegistry) {
 				}
 
 				t.Status(`fingerprint`)
-				fingerprint := func(db string, asof string) (string, error) {
-					var b strings.Builder
 
-					var tables []string
-					rows, err := conn.QueryContext(
-						ctx,
-						fmt.Sprintf("SELECT table_name FROM [SHOW TABLES FROM %s] ORDER BY table_name", db),
-					)
-					if err != nil {
-						return "", err
-					}
-					defer rows.Close()
-					for rows.Next() {
-						var name string
-						if err := rows.Scan(&name); err != nil {
-							return "", err
-						}
-						tables = append(tables, name)
-					}
-
-					for _, table := range tables {
-						fmt.Fprintf(&b, "table %s\n", table)
-						query := fmt.Sprintf("SHOW EXPERIMENTAL_FINGERPRINTS FROM TABLE %s.%s", db, table)
-						if asof != "" {
-							query = fmt.Sprintf("SELECT * FROM [%s] AS OF SYSTEM TIME %s", query, asof)
-						}
-						rows, err = conn.QueryContext(ctx, query)
-						if err != nil {
-							return "", err
-						}
-						defer rows.Close()
-						for rows.Next() {
-							var name, fp string
-							if err := rows.Scan(&name, &fp); err != nil {
-								return "", err
-							}
-							fmt.Fprintf(&b, "%s: %s\n", name, fp)
-						}
-					}
-
-					return b.String(), rows.Err()
-				}
-
-				tpccFull, err := fingerprint("tpcc", tFull)
+				tpccFull, err := fingerprint(ctx, conn, "tpcc", tFull)
 				if err != nil {
 					return err
 				}
-				tpccInc, err := fingerprint("tpcc", tInc)
+				tpccInc, err := fingerprint(ctx, conn, "tpcc", tInc)
 				if err != nil {
 					return err
 				}
-				restoreFull, err := fingerprint("restore_full", "")
+				restoreFull, err := fingerprint(ctx, conn, "restore_full", "")
 				if err != nil {
 					return err
 				}
-				restoreInc, err := fingerprint("restore_inc", "")
+				restoreInc, err := fingerprint(ctx, conn, "restore_inc", "")
 				if err != nil {
 					return err
 				}
