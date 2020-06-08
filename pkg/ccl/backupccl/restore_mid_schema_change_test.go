@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
+	"github.com/cockroachdb/cockroach/pkg/ccl/backupccl"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
@@ -130,16 +131,16 @@ func restoreMidSchemaChange(backupDir, schemaChangeName string) func(t *testing.
 		}(jobs.DefaultAdoptInterval)
 		jobs.DefaultAdoptInterval = 100 * time.Millisecond
 		const numAccounts = 1000
-		_, _, sqlDB, dir, cleanup := backupRestoreTestSetupWithParams(t, singleNode, numAccounts,
-			initNone, base.TestClusterArgs{ServerArgs: params})
+		_, _, sqlDB, dir, cleanup := backupccl.BackupRestoreTestSetupWithParams(t, backupccl.SingleNode, numAccounts,
+			backupccl.InitNone, base.TestClusterArgs{ServerArgs: params})
 		defer cleanup()
 		symlink := filepath.Join(dir, "foo")
 		err := os.Symlink(backupDir, symlink)
 		require.NoError(t, err)
 		sqlDB.Exec(t, "USE defaultdb")
 		restoreQuery := fmt.Sprintf("RESTORE defaultdb.* from $1")
-		log.Infof(context.Background(), "%+v", sqlDB.QueryStr(t, "SHOW BACKUP $1", localFoo))
-		sqlDB.Exec(t, restoreQuery, localFoo)
+		log.Infof(context.Background(), "%+v", sqlDB.QueryStr(t, "SHOW BACKUP $1", backupccl.LocalFoo))
+		sqlDB.Exec(t, restoreQuery, backupccl.LocalFoo)
 		verify(t, schemaChangeName, sqlDB)
 	}
 }
