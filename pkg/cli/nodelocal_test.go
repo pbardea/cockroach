@@ -26,7 +26,7 @@ func Example_nodelocal() {
 	c := newCLITest(cliTestParams{})
 	defer c.cleanup()
 
-	file, cleanUp := createTestFile("test.csv", "content")
+	file, cleanUp := createTestFile("test*.csv", "content")
 	defer cleanUp()
 
 	c.Run(fmt.Sprintf("nodelocal upload %s /test/file1.csv", file))
@@ -125,9 +125,19 @@ func TestNodeLocalFileUpload(t *testing.T) {
 	}
 }
 
+// createTestFile creates a unique test file. See ioutil.TempFile for how the
+// filename is made unique.
 func createTestFile(name, content string) (string, func()) {
-	err := ioutil.WriteFile(name, []byte(content), 0666)
+	// Generate a unique filename to avoid parallel test runs interfering with
+	// each other.
+	file, err := ioutil.TempFile("" /* dir */, name)
 	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return "", func() {}
+	}
+
+	if err := ioutil.WriteFile(file.Name(), []byte(content), 0666); err != nil {
+		fmt.Fprintln(stderr, err)
 		return "", func() {}
 	}
 	return name, func() {
