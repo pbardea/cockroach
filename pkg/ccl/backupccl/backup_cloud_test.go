@@ -6,7 +6,7 @@
 //
 //     https://github.com/cockroachdb/cockroach/blob/master/licenses/CCL.txt
 
-package backupccl_test
+package backupccl
 
 import (
 	"fmt"
@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/cockroachdb/cockroach/pkg/ccl/backupccl"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/lease"
 	"github.com/cockroachdb/cockroach/pkg/storage/cloud"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
@@ -46,7 +45,7 @@ func TestCloudBackupRestoreS3(t *testing.T) {
 	defer lease.TestingDisableTableLeases()()
 	const numAccounts = 1000
 
-	ctx, tc, _, _, cleanupFn := backupccl.BackupRestoreTestSetup(t, 1, numAccounts, backupccl.InitNone)
+	ctx, tc, _, _, cleanupFn := BackupRestoreTestSetup(t, 1, numAccounts, InitNone)
 	defer cleanupFn()
 	prefix := fmt.Sprintf("TestBackupRestoreS3-%d", timeutil.Now().UnixNano())
 	uri := url.URL{Scheme: "s3", Host: bucket, Path: prefix}
@@ -55,7 +54,7 @@ func TestCloudBackupRestoreS3(t *testing.T) {
 	values.Add(cloud.S3SecretParam, creds.SecretAccessKey)
 	uri.RawQuery = values.Encode()
 
-	backupccl.BackupAndRestore(ctx, t, tc, []string{uri.String()}, []string{uri.String()}, numAccounts)
+	BackupAndRestore(ctx, t, tc, []string{uri.String()}, []string{uri.String()}, numAccounts)
 }
 
 // TestBackupRestoreGoogleCloudStorage hits the real GCS and so could
@@ -71,11 +70,11 @@ func TestCloudBackupRestoreGoogleCloudStorage(t *testing.T) {
 	defer lease.TestingDisableTableLeases()()
 	const numAccounts = 1000
 
-	ctx, tc, _, _, cleanupFn := backupccl.BackupRestoreTestSetup(t, 1, numAccounts, backupccl.InitNone)
+	ctx, tc, _, _, cleanupFn := BackupRestoreTestSetup(t, 1, numAccounts, InitNone)
 	defer cleanupFn()
 	prefix := fmt.Sprintf("TestBackupRestoreGoogleCloudStorage-%d", timeutil.Now().UnixNano())
 	uri := url.URL{Scheme: "gs", Host: bucket, Path: prefix}
-	backupccl.BackupAndRestore(ctx, t, tc, []string{uri.String()}, []string{uri.String()}, numAccounts)
+	BackupAndRestore(ctx, t, tc, []string{uri.String()}, []string{uri.String()}, numAccounts)
 }
 
 // TestBackupRestoreAzure hits the real Azure Blob Storage and so could
@@ -97,7 +96,7 @@ func TestCloudBackupRestoreAzure(t *testing.T) {
 	defer lease.TestingDisableTableLeases()()
 	const numAccounts = 1000
 
-	ctx, tc, _, _, cleanupFn := backupccl.BackupRestoreTestSetup(t, 1, numAccounts, backupccl.InitNone)
+	ctx, tc, _, _, cleanupFn := BackupRestoreTestSetup(t, 1, numAccounts, InitNone)
 	defer cleanupFn()
 	prefix := fmt.Sprintf("TestBackupRestoreAzure-%d", timeutil.Now().UnixNano())
 	uri := url.URL{Scheme: "azure", Host: bucket, Path: prefix}
@@ -106,5 +105,5 @@ func TestCloudBackupRestoreAzure(t *testing.T) {
 	values.Add(cloud.AzureAccountKeyParam, accountKey)
 	uri.RawQuery = values.Encode()
 
-	backupccl.BackupAndRestore(ctx, t, tc, []string{uri.String()}, []string{uri.String()}, numAccounts)
+	BackupAndRestore(ctx, t, tc, []string{uri.String()}, []string{uri.String()}, numAccounts)
 }

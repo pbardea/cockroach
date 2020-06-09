@@ -6,7 +6,7 @@
 //
 //     https://github.com/cockroachdb/cockroach/blob/master/licenses/CCL.txt
 
-package backupccl_test
+package backupccl
 
 import (
 	"fmt"
@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/cockroachdb/cockroach/pkg/ccl/backupccl"
 	_ "github.com/cockroachdb/cockroach/pkg/ccl/partitionccl"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlbase"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
@@ -26,8 +25,8 @@ func TestFullClusterBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, tempDir, cleanupFn := backupccl.BackupRestoreTestSetup(t, backupccl.SingleNode, numAccounts, backupccl.InitNone)
-	_, _, sqlDBRestore, cleanupEmptyCluster := backupccl.BackupRestoreTestSetupEmpty(t, backupccl.SingleNode, tempDir, backupccl.InitNone)
+	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
+	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 
@@ -71,7 +70,7 @@ func TestFullClusterBackup(t *testing.T) {
 	sqlDB.Exec(t, `GRANT system_ops TO maxroach1;`)
 
 	sqlDB.Exec(t, `CREATE STATISTICS my_stats FROM data.bank`)
-	sqlDB.Exec(t, `BACKUP TO $1`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
 
 	// Create a bunch of user tables on the restoring cluster that we're going
 	// to delete.
@@ -87,7 +86,7 @@ func TestFullClusterBackup(t *testing.T) {
 		[][]string{{"0"}},
 	)
 
-	sqlDBRestore.Exec(t, `RESTORE FROM $1`, backupccl.LocalFoo)
+	sqlDBRestore.Exec(t, `RESTORE FROM $1`, LocalFoo)
 
 	t.Run("ensure all databases restored", func(t *testing.T) {
 		sqlDBRestore.CheckQueryResults(t,
@@ -209,15 +208,15 @@ func TestFullClusterBackupDroppedTables(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, tempDir, cleanupFn := backupccl.BackupRestoreTestSetup(t, backupccl.SingleNode, numAccounts, backupccl.InitNone)
-	_, _, sqlDBRestore, cleanupEmptyCluster := backupccl.BackupRestoreTestSetupEmpty(t, backupccl.SingleNode, tempDir, backupccl.InitNone)
+	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
+	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 
-	_, tablesToCheck := backupccl.GenerateInterleavedData(sqlDB, t, numAccounts)
+	_, tablesToCheck := GenerateInterleavedData(sqlDB, t, numAccounts)
 
-	sqlDB.Exec(t, `BACKUP TO $1`, backupccl.LocalFoo)
-	sqlDBRestore.Exec(t, `RESTORE FROM $1`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
+	sqlDBRestore.Exec(t, `RESTORE FROM $1`, LocalFoo)
 
 	for _, table := range tablesToCheck {
 		query := fmt.Sprintf("SELECT * FROM data.%s", table)
@@ -230,16 +229,16 @@ func TestIncrementalFullClusterBackup(t *testing.T) {
 
 	const numAccounts = 10
 	const incrementalBackupLocation = "nodelocal://0/inc-full-backup"
-	_, _, sqlDB, tempDir, cleanupFn := backupccl.BackupRestoreTestSetup(t, backupccl.SingleNode, numAccounts, backupccl.InitNone)
-	_, _, sqlDBRestore, cleanupEmptyCluster := backupccl.BackupRestoreTestSetupEmpty(t, backupccl.SingleNode, tempDir, backupccl.InitNone)
+	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
+	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 
-	sqlDB.Exec(t, `BACKUP TO $1`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
 	sqlDB.Exec(t, fmt.Sprintf("CREATE USER maxroach1"))
 
-	sqlDB.Exec(t, `BACKUP TO $1 INCREMENTAL FROM $2`, incrementalBackupLocation, backupccl.LocalFoo)
-	sqlDBRestore.Exec(t, `RESTORE FROM $1, $2`, backupccl.LocalFoo, incrementalBackupLocation)
+	sqlDB.Exec(t, `BACKUP TO $1 INCREMENTAL FROM $2`, incrementalBackupLocation, LocalFoo)
+	sqlDBRestore.Exec(t, `RESTORE FROM $1, $2`, LocalFoo, incrementalBackupLocation)
 
 	checkQuery := "SELECT * FROM system.users"
 	sqlDBRestore.CheckQueryResults(t, checkQuery, sqlDB.QueryStr(t, checkQuery))
@@ -250,15 +249,15 @@ func TestIncrementalFullClusterBackup(t *testing.T) {
 func TestEmptyFullClusterRestore(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	sqlDB, tempDir, cleanupFn := backupccl.CreateEmptyCluster(t, backupccl.SingleNode)
-	_, _, sqlDBRestore, cleanupEmptyCluster := backupccl.BackupRestoreTestSetupEmpty(t, backupccl.SingleNode, tempDir, backupccl.InitNone)
+	sqlDB, tempDir, cleanupFn := CreateEmptyCluster(t, SingleNode)
+	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 
 	sqlDB.Exec(t, `CREATE USER alice`)
 	sqlDB.Exec(t, `CREATE USER bob`)
-	sqlDB.Exec(t, `BACKUP TO $1`, backupccl.LocalFoo)
-	sqlDBRestore.Exec(t, `RESTORE FROM $1`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
+	sqlDBRestore.Exec(t, `RESTORE FROM $1`, LocalFoo)
 
 	checkQuery := "SELECT * FROM system.users"
 	sqlDBRestore.CheckQueryResults(t, checkQuery, sqlDB.QueryStr(t, checkQuery))
@@ -268,16 +267,16 @@ func TestDisallowFullClusterRestoreOnNonFreshCluster(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, tempDir, cleanupFn := backupccl.BackupRestoreTestSetup(t, backupccl.SingleNode, numAccounts, backupccl.InitNone)
-	_, _, sqlDBRestore, cleanupEmptyCluster := backupccl.BackupRestoreTestSetupEmpty(t, backupccl.SingleNode, tempDir, backupccl.InitNone)
+	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
+	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 
-	sqlDB.Exec(t, `BACKUP TO $1`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
 	sqlDBRestore.Exec(t, `CREATE DATABASE foo`)
 	sqlDBRestore.ExpectErr(
 		t, "pq: full cluster restore can only be run on a cluster with no tables or databases but found 1 descriptors",
-		`RESTORE FROM $1`, backupccl.LocalFoo,
+		`RESTORE FROM $1`, LocalFoo,
 	)
 }
 
@@ -285,15 +284,15 @@ func TestDisallowFullClusterRestoreOfNonFullBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, tempDir, cleanupFn := backupccl.BackupRestoreTestSetup(t, backupccl.SingleNode, numAccounts, backupccl.InitNone)
-	_, _, sqlDBRestore, cleanupEmptyCluster := backupccl.BackupRestoreTestSetupEmpty(t, backupccl.SingleNode, tempDir, backupccl.InitNone)
+	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
+	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 
-	sqlDB.Exec(t, `BACKUP data.bank TO $1`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `BACKUP data.bank TO $1`, LocalFoo)
 	sqlDBRestore.ExpectErr(
 		t, "pq: full cluster RESTORE can only be used on full cluster BACKUP files",
-		`RESTORE FROM $1`, backupccl.LocalFoo,
+		`RESTORE FROM $1`, LocalFoo,
 	)
 }
 
@@ -301,12 +300,12 @@ func TestAllowNonFullClusterRestoreOfFullBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, _, cleanupFn := backupccl.BackupRestoreTestSetup(t, backupccl.SingleNode, numAccounts, backupccl.InitNone)
+	_, _, sqlDB, _, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
 	defer cleanupFn()
 
-	sqlDB.Exec(t, `BACKUP TO $1`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
 	sqlDB.Exec(t, `CREATE DATABASE data2`)
-	sqlDB.Exec(t, `RESTORE data.bank FROM $1 WITH into_db='data2'`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `RESTORE data.bank FROM $1 WITH into_db='data2'`, LocalFoo)
 
 	checkResults := "SELECT * FROM data.bank"
 	sqlDB.CheckQueryResults(t, checkResults, sqlDB.QueryStr(t, checkResults))
@@ -316,12 +315,12 @@ func TestResotreDatabaseFromFullClusterBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, _, cleanupFn := backupccl.BackupRestoreTestSetup(t, backupccl.SingleNode, numAccounts, backupccl.InitNone)
+	_, _, sqlDB, _, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
 	defer cleanupFn()
 
-	sqlDB.Exec(t, `BACKUP TO $1`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
 	sqlDB.Exec(t, `DROP DATABASE data`)
-	sqlDB.Exec(t, `RESTORE DATABASE data FROM $1`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `RESTORE DATABASE data FROM $1`, LocalFoo)
 
 	sqlDB.CheckQueryResults(t, "SELECT count(*) FROM data.bank", [][]string{{"10"}})
 }
@@ -330,13 +329,13 @@ func TestRestoreSystemTableFromFullClusterBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, _, cleanupFn := backupccl.BackupRestoreTestSetup(t, backupccl.SingleNode, numAccounts, backupccl.InitNone)
+	_, _, sqlDB, _, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
 	defer cleanupFn()
 
 	sqlDB.Exec(t, `CREATE USER maxroach`)
-	sqlDB.Exec(t, `BACKUP TO $1`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
 	sqlDB.Exec(t, `CREATE DATABASE temp_sys`)
-	sqlDB.Exec(t, `RESTORE system.users FROM $1 WITH into_db='temp_sys'`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `RESTORE system.users FROM $1 WITH into_db='temp_sys'`, LocalFoo)
 
 	sqlDB.CheckQueryResults(t, "SELECT * FROM temp_sys.users", sqlDB.QueryStr(t, "SELECT * FROM system.users"))
 }
@@ -344,13 +343,13 @@ func TestRestoreSystemTableFromFullClusterBackup(t *testing.T) {
 func TestCreateDBAndTableIncrementalFullClusterBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	_, _, sqlDB, _, cleanupFn := backupccl.BackupRestoreTestSetup(t, backupccl.SingleNode, 0, backupccl.InitNone)
+	_, _, sqlDB, _, cleanupFn := BackupRestoreTestSetup(t, SingleNode, 0, InitNone)
 	defer cleanupFn()
 
-	sqlDB.Exec(t, `BACKUP TO $1`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
 	sqlDB.Exec(t, `CREATE DATABASE foo`)
 	sqlDB.Exec(t, `CREATE TABLE foo.bar (a int)`)
 
 	// Ensure that the new backup succeeds.
-	sqlDB.Exec(t, `BACKUP TO $1`, backupccl.LocalFoo)
+	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
 }

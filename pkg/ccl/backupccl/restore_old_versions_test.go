@@ -6,7 +6,7 @@
 //
 //     https://github.com/cockroachdb/cockroach/blob/master/licenses/CCL.txt
 
-package backupccl_test
+package backupccl
 
 import (
 	"io/ioutil"
@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
-	"github.com/cockroachdb/cockroach/pkg/ccl/backupccl"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/stretchr/testify/require"
 )
@@ -60,15 +59,15 @@ func restoreOldVersionTest(exportDir string) func(t *testing.T) {
 	return func(t *testing.T) {
 		params := base.TestServerArgs{}
 		const numAccounts = 1000
-		_, _, sqlDB, dir, cleanup := backupccl.BackupRestoreTestSetupWithParams(t, backupccl.SingleNode, numAccounts,
-			backupccl.InitNone, base.TestClusterArgs{ServerArgs: params})
+		_, _, sqlDB, dir, cleanup := BackupRestoreTestSetupWithParams(t, SingleNode, numAccounts,
+			InitNone, base.TestClusterArgs{ServerArgs: params})
 		defer cleanup()
 		err := os.Symlink(exportDir, filepath.Join(dir, "foo"))
 		require.NoError(t, err)
 		sqlDB.Exec(t, `CREATE DATABASE test`)
 		var unused string
 		var importedRows int
-		sqlDB.QueryRow(t, `RESTORE test.* FROM $1`, backupccl.LocalFoo).Scan(
+		sqlDB.QueryRow(t, `RESTORE test.* FROM $1`, LocalFoo).Scan(
 			&unused, &unused, &unused, &importedRows, &unused, &unused,
 		)
 		const totalRows = 12
