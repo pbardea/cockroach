@@ -54,7 +54,7 @@ func TestCloudBackupRestoreS3(t *testing.T) {
 	values.Add(cloud.S3SecretParam, creds.SecretAccessKey)
 	uri.RawQuery = values.Encode()
 
-	BackupAndRestore(ctx, t, tc, []string{uri.String()}, []string{uri.String()}, numAccounts)
+	backupAndRestore(ctx, t, tc, []string{uri.String()}, []string{uri.String()}, numAccounts)
 }
 
 // TestBackupRestoreGoogleCloudStorage hits the real GCS and so could
@@ -74,7 +74,7 @@ func TestCloudBackupRestoreGoogleCloudStorage(t *testing.T) {
 	defer cleanupFn()
 	prefix := fmt.Sprintf("TestBackupRestoreGoogleCloudStorage-%d", timeutil.Now().UnixNano())
 	uri := url.URL{Scheme: "gs", Host: bucket, Path: prefix}
-	BackupAndRestore(ctx, t, tc, []string{uri.String()}, []string{uri.String()}, numAccounts)
+	backupAndRestore(ctx, t, tc, []string{uri.String()}, []string{uri.String()}, numAccounts)
 }
 
 // TestBackupRestoreAzure hits the real Azure Blob Storage and so could
@@ -105,5 +105,5 @@ func TestCloudBackupRestoreAzure(t *testing.T) {
 	values.Add(cloud.AzureAccountKeyParam, accountKey)
 	uri.RawQuery = values.Encode()
 
-	BackupAndRestore(ctx, t, tc, []string{uri.String()}, []string{uri.String()}, numAccounts)
+	backupAndRestore(ctx, t, tc, []string{uri.String()}, []string{uri.String()}, numAccounts)
 }

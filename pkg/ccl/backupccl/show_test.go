@@ -26,9 +26,9 @@ func TestShowBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 11
-	_, tc, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
+	_, tc, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, singleNode, numAccounts, InitNone)
 	kvDB := tc.Server(0).DB()
-	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
+	_, _, sqlDBRestore, cleanupEmptyCluster := backupRestoreTestSetupEmpty(t, singleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 

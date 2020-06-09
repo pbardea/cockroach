@@ -35,10 +35,10 @@ import (
 )
 
 const (
-	SingleNode                  = 1
+	singleNode                  = 1
 	MultiNode                   = 3
-	BackupRestoreDefaultRanges  = 10
-	BackupRestoreRowPayloadSize = 100
+	backupRestoreDefaultRanges  = 10
+	backupRestoreRowPayloadSize = 100
 	LocalFoo                    = "nodelocal://0/foo"
 )
 
@@ -66,7 +66,7 @@ func backupRestoreTestSetupEmptyWithParams(
 	return ctx, tc, sqlDB, cleanupFn
 }
 
-func CreateEmptyCluster(
+func createEmptyCluster(
 	t testing.TB, clusterSize int,
 ) (sqlDB *sqlutils.SQLRunner, tempDir string, cleanup func()) {
 	ctx := context.Background()
@@ -86,7 +86,7 @@ func CreateEmptyCluster(
 	return sqlDB, dir, cleanupFn
 }
 
-func BackupRestoreTestSetupWithParams(
+func backupRestoreTestSetupWithParams(
 	t testing.TB,
 	clusterSize int,
 	numAccounts int,
@@ -142,16 +142,16 @@ func BackupRestoreTestSetup(
 	tempDir string,
 	cleanup func(),
 ) {
-	return BackupRestoreTestSetupWithParams(t, clusterSize, numAccounts, init, base.TestClusterArgs{})
+	return backupRestoreTestSetupWithParams(t, clusterSize, numAccounts, init, base.TestClusterArgs{})
 }
 
-func BackupRestoreTestSetupEmpty(
+func backupRestoreTestSetupEmpty(
 	t testing.TB, clusterSize int, tempDir string, init func(*testcluster.TestCluster),
 ) (ctx context.Context, tc *testcluster.TestCluster, sqlDB *sqlutils.SQLRunner, cleanup func()) {
 	return backupRestoreTestSetupEmptyWithParams(t, clusterSize, tempDir, init, base.TestClusterArgs{})
 }
 
-func VerifyBackupRestoreStatementResult(
+func verifyBackupRestoreStatementResult(
 	t *testing.T, sqlDB *sqlutils.SQLRunner, query string, args ...interface{},
 ) error {
 	t.Helper()
@@ -203,7 +203,7 @@ func VerifyBackupRestoreStatementResult(
 	return nil
 }
 
-func GenerateInterleavedData(
+func generateInterleavedData(
 	sqlDB *sqlutils.SQLRunner, t *testing.T, numAccounts int,
 ) (int, []string) {
 	_ = sqlDB.Exec(t, `SET CLUSTER SETTING kv.range_merge.queue_enabled = false`)
@@ -261,7 +261,7 @@ func GenerateInterleavedData(
 	return totalRows, tableNames
 }
 
-func GetFirstStoreReplica(
+func getFirstStoreReplica(
 	t *testing.T, s serverutils.TestServerInterface, key roachpb.Key,
 ) (*kvserver.Store, *kvserver.Replica) {
 	t.Helper()
@@ -278,7 +278,7 @@ func GetFirstStoreReplica(
 	return store, repl
 }
 
-func BackupAndRestore(
+func backupAndRestore(
 	ctx context.Context,
 	t *testing.T,
 	tc *testcluster.TestCluster,
@@ -335,7 +335,7 @@ func BackupAndRestore(
 		// backups of no data still contain the system.users and system.descriptor
 		// tables. Just skip the check in this case.
 		if numAccounts > 0 {
-			approxBytes := int64(BackupRestoreRowPayloadSize * numAccounts)
+			approxBytes := int64(backupRestoreRowPayloadSize * numAccounts)
 			if max := approxBytes * 3; exported.bytes < approxBytes || exported.bytes > max {
 				t.Errorf("expected data size in [%d,%d] but was %d", approxBytes, max, exported.bytes)
 			}
@@ -396,7 +396,7 @@ func BackupAndRestore(
 			}
 		}
 		args := base.TestServerArgs{ExternalIODir: tc.Servers[backupNodeID].ClusterSettings().ExternalIODir}
-		tcRestore := testcluster.StartTestCluster(t, SingleNode, base.TestClusterArgs{ServerArgs: args})
+		tcRestore := testcluster.StartTestCluster(t, singleNode, base.TestClusterArgs{ServerArgs: args})
 		defer tcRestore.Stopper().Stop(ctx)
 		sqlDBRestore := sqlutils.MakeSQLRunner(tcRestore.Conns[0])
 
@@ -415,7 +415,7 @@ func BackupAndRestore(
 		sqlDBRestore.QueryRow(t, restoreQuery, restoreURIArgs...).Scan(
 			&unused, &unused, &unused, &restored.rows, &restored.idx, &restored.bytes,
 		)
-		approxBytes := int64(BackupRestoreRowPayloadSize * numAccounts)
+		approxBytes := int64(backupRestoreRowPayloadSize * numAccounts)
 		if max := approxBytes * 3; restored.bytes < approxBytes || restored.bytes > max {
 			t.Errorf("expected data size in [%d,%d] but was %d", approxBytes, max, restored.bytes)
 		}

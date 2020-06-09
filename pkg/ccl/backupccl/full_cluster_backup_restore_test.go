@@ -25,8 +25,8 @@ func TestFullClusterBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
-	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
+	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, singleNode, numAccounts, InitNone)
+	_, _, sqlDBRestore, cleanupEmptyCluster := backupRestoreTestSetupEmpty(t, singleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 
@@ -208,12 +208,12 @@ func TestFullClusterBackupDroppedTables(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
-	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
+	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, singleNode, numAccounts, InitNone)
+	_, _, sqlDBRestore, cleanupEmptyCluster := backupRestoreTestSetupEmpty(t, singleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 
-	_, tablesToCheck := GenerateInterleavedData(sqlDB, t, numAccounts)
+	_, tablesToCheck := generateInterleavedData(sqlDB, t, numAccounts)
 
 	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
 	sqlDBRestore.Exec(t, `RESTORE FROM $1`, LocalFoo)
@@ -229,8 +229,8 @@ func TestIncrementalFullClusterBackup(t *testing.T) {
 
 	const numAccounts = 10
 	const incrementalBackupLocation = "nodelocal://0/inc-full-backup"
-	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
-	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
+	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, singleNode, numAccounts, InitNone)
+	_, _, sqlDBRestore, cleanupEmptyCluster := backupRestoreTestSetupEmpty(t, singleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 
@@ -249,8 +249,8 @@ func TestIncrementalFullClusterBackup(t *testing.T) {
 func TestEmptyFullClusterRestore(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	sqlDB, tempDir, cleanupFn := CreateEmptyCluster(t, SingleNode)
-	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
+	sqlDB, tempDir, cleanupFn := createEmptyCluster(t, singleNode)
+	_, _, sqlDBRestore, cleanupEmptyCluster := backupRestoreTestSetupEmpty(t, singleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 
@@ -267,8 +267,8 @@ func TestDisallowFullClusterRestoreOnNonFreshCluster(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
-	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
+	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, singleNode, numAccounts, InitNone)
+	_, _, sqlDBRestore, cleanupEmptyCluster := backupRestoreTestSetupEmpty(t, singleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 
@@ -284,8 +284,8 @@ func TestDisallowFullClusterRestoreOfNonFullBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
-	_, _, sqlDBRestore, cleanupEmptyCluster := BackupRestoreTestSetupEmpty(t, SingleNode, tempDir, InitNone)
+	_, _, sqlDB, tempDir, cleanupFn := BackupRestoreTestSetup(t, singleNode, numAccounts, InitNone)
+	_, _, sqlDBRestore, cleanupEmptyCluster := backupRestoreTestSetupEmpty(t, singleNode, tempDir, InitNone)
 	defer cleanupFn()
 	defer cleanupEmptyCluster()
 
@@ -300,7 +300,7 @@ func TestAllowNonFullClusterRestoreOfFullBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, _, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
+	_, _, sqlDB, _, cleanupFn := BackupRestoreTestSetup(t, singleNode, numAccounts, InitNone)
 	defer cleanupFn()
 
 	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
@@ -315,7 +315,7 @@ func TestResotreDatabaseFromFullClusterBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, _, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
+	_, _, sqlDB, _, cleanupFn := BackupRestoreTestSetup(t, singleNode, numAccounts, InitNone)
 	defer cleanupFn()
 
 	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
@@ -329,7 +329,7 @@ func TestRestoreSystemTableFromFullClusterBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	const numAccounts = 10
-	_, _, sqlDB, _, cleanupFn := BackupRestoreTestSetup(t, SingleNode, numAccounts, InitNone)
+	_, _, sqlDB, _, cleanupFn := BackupRestoreTestSetup(t, singleNode, numAccounts, InitNone)
 	defer cleanupFn()
 
 	sqlDB.Exec(t, `CREATE USER maxroach`)
@@ -343,7 +343,7 @@ func TestRestoreSystemTableFromFullClusterBackup(t *testing.T) {
 func TestCreateDBAndTableIncrementalFullClusterBackup(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	_, _, sqlDB, _, cleanupFn := BackupRestoreTestSetup(t, SingleNode, 0, InitNone)
+	_, _, sqlDB, _, cleanupFn := BackupRestoreTestSetup(t, singleNode, 0, InitNone)
 	defer cleanupFn()
 
 	sqlDB.Exec(t, `BACKUP TO $1`, LocalFoo)
