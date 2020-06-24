@@ -907,7 +907,12 @@ func createImportingDescriptors(
 	var tables []sqlbase.TableDescriptorInterface
 	var types []sqlbase.TypeDescriptorInterface
 	var oldTableIDs []sqlbase.ID
+	tempSystemDBID := keys.MinNonPredefinedUserDescID
 	for _, desc := range sqlDescs {
+		if int(desc.GetID()) > tempSystemDBID {
+			tempSystemDBID = int(desc.GetID()) + 1
+		}
+
 		if tableDesc := desc.Table(hlc.Timestamp{}); tableDesc != nil {
 			table := sqlbase.NewMutableCreatedTableDescriptor(*tableDesc)
 			tables = append(tables, table)
@@ -924,12 +929,7 @@ func createImportingDescriptors(
 			types = append(types, sqlbase.NewMutableCreatedTypeDescriptor(*typDesc))
 		}
 	}
-	tempSystemDBID := keys.MinNonPredefinedUserDescID
-	for id := range details.DescriptorRewrites {
-		if int(id) > tempSystemDBID {
-			tempSystemDBID = int(id)
-		}
-	}
+
 	if details.DescriptorCoverage == tree.AllDescriptors {
 		databases = append(databases, sqlbase.NewInitialDatabaseDescriptor(
 			sqlbase.ID(tempSystemDBID), restoreTempSystemDB))
