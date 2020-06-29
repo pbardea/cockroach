@@ -1002,6 +1002,36 @@ message TableDescriptor {
   // before 20.1 refer to persistent tables, so lack of the flag being set implies
   // the table is persistent.
   optional bool temporary = 39 [(gogoproto.nullable) = false];
+
+  // backup_options specifies how this descriptor should be treated when backing
+  // up and restoring the table.
+  // The settings here are primarily used with regards to system tables and
+  // specifying how they interact with cluster backup/restore.
+  optional BackupOptions backup_options = 41 [(gogoproto.nullable) = false];
+
+  // NEXTID = 42
+}
+
+// BackupOptions is a collection of fields that specifies if any special
+// handling is required when backing up and restoring this table. In particular,
+// this is interesting for system tables in determining if they should be
+// included in a backup and if so, when it should be restored.
+message BackupOptions {
+  option (gogoproto.equal) = true;
+  // TODO(pbardea): Clean this up.
+  // include_in_cluster_backup specifies if a given system table should be
+  // included as part of the "logical" cluster to backup and restore in cluster
+  // backups. Tables that should be included if they contain metadata relating
+  // to the data in the backup (as opposed to references to the specific nodes
+  // the cluster is running on).
+  optional bool include_in_cluster_backup = 1 [(gogoproto.nullable) = false];
+
+  // restore_before_data should only be set for system tables. During a cluster
+  // restore, some system tables should be restored before the data (such as the
+  // zone configs to control the placement of data), and some should be set
+  // afterwards (e.g. settings, to control the settings that are used to control
+  // the execution of the restore).
+  optional bool restore_before_data = 2 [(gogoproto.nullable) = false];
 }
 
 // DatabaseDescriptor represents a namespace (aka database) and is stored
