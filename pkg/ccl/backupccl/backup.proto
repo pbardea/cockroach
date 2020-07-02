@@ -31,6 +31,12 @@ message RowCount {
   reserved 4; // was BulkOpSummary's system_records.
 }
 
+message RestoreProgress {
+  int64 progress_idx = 1;
+  bytes key = 2 [(gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/roachpb.Key"];
+  RowCount row_count = 3 [(gogoproto.nullable) = false];
+}
+
 // BackupManifest represents a consistent snapshot of ranges.
 //
 // Each range snapshot includes a path to data that is a diff of the data in

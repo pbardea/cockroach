@@ -1273,6 +1273,25 @@ func TestRestoreFailDatabaseCleanup(t *testing.T) {
 	close(blockGC)
 }
 
+func TestBackupRestoreTempooraryTables(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	t.Run("disallow explicit backup of temp table", func(t *testing.T) {
+	})
+
+	t.Run("do not include temp tables in db.* backups", func(t *testing.T) {
+
+	})
+
+	t.Run("do not include temp tables in database backups", func(t *testing.T) {
+
+	})
+
+	t.Run("do not include temp tables in cluster backups", func(t *testing.T) {
+
+	})
+}
+
 func TestBackupRestoreUserDefinedTypes(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 

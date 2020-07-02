@@ -739,7 +739,6 @@ func restore(
 				importRes, pErr := kv.SendWrapped(ctx, db.NonTransactionalSender(), importRequest)
 				if pErr != nil {
 					return errors.Wrapf(pErr.GoError(), "importing span %v", importRequest.DataSpan)
-
 				}
 
 				mu.Lock()
