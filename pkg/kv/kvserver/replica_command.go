@@ -2377,6 +2377,7 @@ func (r *Replica) adminScatter(
 		re.Reset()
 	}
 
+	lease, _ /* nextLease */ := r.GetLease()
 	// If we've been asked to randomize the leases beyond what the replicate
 	// queue would do on its own (#17341), do so after the replicate queue is
 	// done by transferring the lease to any of the given N replicas with
@@ -2395,14 +2396,23 @@ func (r *Replica) adminScatter(
 		}
 	}
 
-	desc := r.Desc()
+	desc, lease := r.GetDescAndLease(ctx)
 	return roachpb.AdminScatterResponse{
-		Ranges: []roachpb.AdminScatterResponse_Range{{
-			Span: roachpb.Span{
-				Key:    desc.StartKey.AsRawKey(),
-				EndKey: desc.EndKey.AsRawKey(),
+		// TODO(pbardea): Remove in 21.1.
+		DeprecatedRanges: []roachpb.AdminScatterResponse_DeprecatedRange{
+			{
+				Span: roachpb.Span{
+					Key:    desc.StartKey.AsRawKey(),
+					EndKey: desc.EndKey.AsRawKey(),
+				},
 			},
-		}},
+		},
+		RangeInfos: []roachpb.RangeInfo{
+			{
+				Desc:  desc,
+				Lease: lease,
+			},
+		},
 	}, nil
 }
 

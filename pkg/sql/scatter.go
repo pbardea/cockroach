@@ -13,8 +13,8 @@ package sql
 import (
 	"context"
 
+	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/keys"
-	"github.com/cockroachdb/cockroach/pkg/kv"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
@@ -122,21 +122,33 @@ type scatterRun struct {
 	span roachpb.Span
 
 	rangeIdx int
-	ranges   []roachpb.AdminScatterResponse_Range
+	ranges   []roachpb.RangeInfo
 }
 
 func (n *scatterNode) startExec(params runParams) error {
 	db := params.p.ExecCfg().DB
-	req := &roachpb.AdminScatterRequest{
+	var ba roachpb.BatchRequest
+	ba.Add(&roachpb.AdminScatterRequest{
 		RequestHeader:   roachpb.RequestHeader{Key: n.run.span.Key, EndKey: n.run.span.EndKey},
 		RandomizeLeases: true,
+	})
+	if !params.ExecCfg().Settings.Version.IsActive(params.ctx, clusterversion.VersionAdminScatterRespHasLease) {
+		ba.Header.ReturnRangeInfo = true
 	}
-	res, pErr := kv.SendWrapped(params.ctx, db.NonTransactionalSender(), req)
+	br, pErr := db.NonTransactionalSender().Send(params.ctx, ba)
 	if pErr != nil {
 		return pErr.GoError()
 	}
+	res := br.Responses[0].GetInner().(*roachpb.AdminScatterResponse)
+
 	n.run.rangeIdx = -1
-	n.run.ranges = res.(*roachpb.AdminScatterResponse).Ranges
+	if res.RangeInfos != nil {
+		n.run.ranges = res.RangeInfos
+	} else {
+		// TODO(pbardea): For compatibility with 20.1, remove in 21.1.
+		n.run.ranges = br.RangeInfos
+	}
+
 	return nil
 }
 
@@ -149,8 +161,8 @@ func (n *scatterNode) Next(params runParams) (bool, error) {
 func (n *scatterNode) Values() tree.Datums {
 	r := n.run.ranges[n.run.rangeIdx]
 	return tree.Datums{
-		tree.NewDBytes(tree.DBytes(r.Span.Key)),
-		tree.NewDString(keys.PrettyPrint(nil /* valDirs */, r.Span.Key)),
+		tree.NewDBytes(tree.DBytes(r.Desc.StartKey.AsRawKey())),
+		tree.NewDString(keys.PrettyPrint(nil /* valDirs */, r.Desc.StartKey.AsRawKey())),
 	}
 }
 
