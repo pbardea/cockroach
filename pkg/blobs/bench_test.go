@@ -83,12 +83,13 @@ func benchmarkStreamingReadFile(b *testing.B, tc *benchmarkTestCase) {
 	writeTo := LocalStorage{externalIODir: tc.localExternalDir}
 	b.ResetTimer()
 	b.SetBytes(tc.fileSize)
+	ctx := context.Background()
 	for i := 0; i < b.N; i++ {
 		reader, err := tc.blobClient.ReadFile(context.Background(), tc.fileName)
 		if err != nil {
 			b.Fatal(err)
 		}
-		err = writeTo.WriteFile(tc.fileName, reader)
+		err = writeTo.WriteFile(ctx, tc.fileName, reader)
 		if err != nil {
 			b.Fatal(err)
 		}

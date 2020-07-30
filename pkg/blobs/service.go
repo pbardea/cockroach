@@ -61,6 +61,7 @@ func (s *Service) GetStream(req *blobspb.GetRequest, stream blobspb.Blob_GetStre
 
 // PutStream implements the gRPC service.
 func (s *Service) PutStream(stream blobspb.Blob_PutStreamServer) error {
+	ctx := context.TODO()
 	md, ok := metadata.FromIncomingContext(stream.Context())
 	if !ok {
 		return errors.New("could not fetch metadata")
@@ -71,7 +72,7 @@ func (s *Service) PutStream(stream blobspb.Blob_PutStreamServer) error {
 	}
 	reader := newPutStreamReader(stream)
 	defer reader.Close()
-	err := s.localStorage.WriteFile(filename[0], reader)
+	err := s.localStorage.WriteFile(ctx, filename[0], reader)
 	return err
 }
 

@@ -11,6 +11,8 @@
 package blobs
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/blobs/blobspb"
 	"github.com/cockroachdb/cockroach/pkg/util/fileutil"
+	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/errors"
 )
 
@@ -65,7 +68,11 @@ func (l *LocalStorage) prependExternalIODir(path string) (string, error) {
 }
 
 // WriteFile prepends IO dir to filename and writes the content to that local file.
-func (l *LocalStorage) WriteFile(filename string, content io.Reader) (err error) {
+func (l *LocalStorage) WriteFile(
+	ctx context.Context, filename string, content io.Reader,
+) (err error) {
+	ctx, span := tracing.ChildSpan(ctx, fmt.Sprintf("writing file %s", filename))
+	defer tracing.FinishSpan(span)
 	fullPath, err := l.prependExternalIODir(filename)
 	if err != nil {
 		return err

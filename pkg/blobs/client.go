@@ -139,7 +139,7 @@ func (c *localClient) ReadFile(ctx context.Context, file string) (io.ReadCloser,
 }
 
 func (c *localClient) WriteFile(ctx context.Context, file string, content io.ReadSeeker) error {
-	return c.localStorage.WriteFile(file, content)
+	return c.localStorage.WriteFile(ctx, file, content)
 }
 
 func (c *localClient) List(ctx context.Context, pattern string) ([]string, error) {
