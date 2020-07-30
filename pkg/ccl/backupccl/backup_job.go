@@ -240,7 +240,7 @@ func backup(
 		for progress := range progCh {
 			var progDetails BackupManifest_Progress
 			if err := types.UnmarshalAny(&progress.ProgressDetails, &progDetails); err != nil {
-				log.Errorf(ctx, "unable to unmarshal backup progress details: %+v", err)
+				log.VErrEventf(ctx, 1, "unable to unmarshal backup progress details: %+v", err)
 			}
 			if backupManifest.RevisionStartTime.Less(progDetails.RevStartTime) {
 				backupManifest.RevisionStartTime = progDetails.RevStartTime
@@ -261,7 +261,7 @@ func backup(
 					ctx, settings, defaultStore, BackupManifestCheckpointName, encryption, backupManifest,
 				)
 				if err != nil {
-					log.Errorf(ctx, "unable to checkpoint backup descriptor: %+v", err)
+					log.VErrEventf(ctx, 1, "unable to checkpoint backup descriptor: %+v", err)
 				}
 
 				lastCheckpoint = timeutil.Now()

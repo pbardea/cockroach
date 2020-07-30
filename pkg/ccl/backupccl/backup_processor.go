@@ -149,7 +149,7 @@ func runBackupProcessor(
 					MVCCFilter:                          spec.MVCCFilter,
 					Encryption:                          spec.Encryption,
 				}
-				log.Infof(ctx, "sending ExportRequest for span %s", span.span)
+				log.VEventf(ctx, 1, "sending ExportRequest for span %s", span.span)
 				rawRes, pErr := kv.SendWrappedWith(ctx, flowCtx.Cfg.DB.NonTransactionalSender(), header, req)
 				if pErr != nil {
 					return errors.Wrapf(pErr.GoError(), "exporting %s", span.span)
