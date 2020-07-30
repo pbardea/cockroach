@@ -30,6 +30,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
+	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/logtags"
 	"github.com/cockroachdb/pebble"
@@ -572,13 +573,14 @@ func (p *Pebble) Closed() bool {
 
 // ExportToSst is part of the engine.Reader interface.
 func (p *Pebble) ExportToSst(
+	ctx context.Context,
 	startKey, endKey roachpb.Key,
 	startTS, endTS hlc.Timestamp,
 	exportAllRevisions bool,
 	targetSize, maxSize uint64,
 	io IterOptions,
 ) ([]byte, roachpb.BulkOpSummary, roachpb.Key, error) {
-	return pebbleExportToSst(p, startKey, endKey, startTS, endTS, exportAllRevisions, targetSize, maxSize, io)
+	return pebbleExportToSst(ctx, p, startKey, endKey, startTS, endTS, exportAllRevisions, targetSize, maxSize, io)
 }
 
 // Get implements the Engine interface.
@@ -1067,13 +1069,14 @@ func (p *pebbleReadOnly) Closed() bool {
 
 // ExportToSst is part of the engine.Reader interface.
 func (p *pebbleReadOnly) ExportToSst(
+	ctx context.Context,
 	startKey, endKey roachpb.Key,
 	startTS, endTS hlc.Timestamp,
 	exportAllRevisions bool,
 	targetSize, maxSize uint64,
 	io IterOptions,
 ) ([]byte, roachpb.BulkOpSummary, roachpb.Key, error) {
-	return pebbleExportToSst(p, startKey, endKey, startTS, endTS, exportAllRevisions, targetSize, maxSize, io)
+	return pebbleExportToSst(ctx, p, startKey, endKey, startTS, endTS, exportAllRevisions, targetSize, maxSize, io)
 }
 
 func (p *pebbleReadOnly) Get(key MVCCKey) ([]byte, error) {
@@ -1189,13 +1192,14 @@ func (p *pebbleSnapshot) Closed() bool {
 
 // ExportToSst is part of the engine.Reader interface.
 func (p *pebbleSnapshot) ExportToSst(
+	ctx context.Context,
 	startKey, endKey roachpb.Key,
 	startTS, endTS hlc.Timestamp,
 	exportAllRevisions bool,
 	targetSize, maxSize uint64,
 	io IterOptions,
 ) ([]byte, roachpb.BulkOpSummary, roachpb.Key, error) {
-	return pebbleExportToSst(p, startKey, endKey, startTS, endTS, exportAllRevisions, targetSize, maxSize, io)
+	return pebbleExportToSst(ctx, p, startKey, endKey, startTS, endTS, exportAllRevisions, targetSize, maxSize, io)
 }
 
 // Get implements the Reader interface.
@@ -1254,6 +1258,7 @@ func (p pebbleSnapshot) NewIterator(opts IterOptions) Iterator {
 }
 
 func pebbleExportToSst(
+	ctx context.Context,
 	reader Reader,
 	startKey, endKey roachpb.Key,
 	startTS, endTS hlc.Timestamp,
@@ -1261,6 +1266,8 @@ func pebbleExportToSst(
 	targetSize, maxSize uint64,
 	io IterOptions,
 ) ([]byte, roachpb.BulkOpSummary, roachpb.Key, error) {
+	ctx, span := tracing.ChildSpan(ctx, fmt.Sprintf("pebble export to sst [%s,%s)", startKey, endKey))
+	defer tracing.FinishSpan(span)
 	sstFile := &MemFile{}
 	sstWriter := MakeBackupSSTWriter(sstFile)
 	defer sstWriter.Close()

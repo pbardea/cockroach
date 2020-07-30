@@ -79,7 +79,8 @@ func assertExportedKVs(
 	expected []MVCCKeyValue,
 ) {
 	const big = 1 << 30
-	data, _, _, err := e.ExportToSst(startKey, endKey, startTime, endTime, revisions, big, big, io)
+	ctx := context.Background()
+	data, _, _, err := e.ExportToSst(ctx, startKey, endKey, startTime, endTime, revisions, big, big, io)
 	require.NoError(t, err)
 
 	if data == nil {

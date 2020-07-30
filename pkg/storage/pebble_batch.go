@@ -11,6 +11,7 @@
 package storage
 
 import (
+	"context"
 	"sync"
 
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
@@ -91,6 +92,7 @@ func (p *pebbleBatch) Closed() bool {
 
 // ExportToSst is part of the engine.Reader interface.
 func (p *pebbleBatch) ExportToSst(
+	ctx context.Context,
 	startKey, endKey roachpb.Key,
 	startTS, endTS hlc.Timestamp,
 	exportAllRevisions bool,

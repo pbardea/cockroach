@@ -1085,6 +1085,7 @@ func runExportToSst(
 	defer cleanup()
 	engine := emk(b, dir)
 	defer engine.Close()
+	ctx := context.Background()
 
 	batch := engine.NewWriteOnlyBatch()
 	for i := 0; i < numKeys; i++ {
@@ -1111,7 +1112,7 @@ func runExportToSst(
 	for i := 0; i < b.N; i++ {
 		startTS := hlc.Timestamp{WallTime: int64(numRevisions / 2)}
 		endTS := hlc.Timestamp{WallTime: int64(numRevisions + 2)}
-		_, _, _, err := engine.ExportToSst(roachpb.KeyMin, roachpb.KeyMax, startTS, endTS, exportAllRevisions, 0 /* targetSize */, 0 /* maxSize */, IterOptions{
+		_, _, _, err := engine.ExportToSst(ctx, roachpb.KeyMin, roachpb.KeyMax, startTS, endTS, exportAllRevisions, 0 /* targetSize */, 0 /* maxSize */, IterOptions{
 			LowerBound: roachpb.KeyMin,
 			UpperBound: roachpb.KeyMax,
 		})

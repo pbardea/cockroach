@@ -11,6 +11,8 @@
 package spanset
 
 import (
+	"context"
+
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/storage"
 	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
@@ -271,13 +273,14 @@ func (s spanSetReader) Closed() bool {
 
 // ExportToSst is part of the engine.Reader interface.
 func (s spanSetReader) ExportToSst(
+	ctx context.Context,
 	startKey, endKey roachpb.Key,
 	startTS, endTS hlc.Timestamp,
 	exportAllRevisions bool,
 	targetSize, maxSize uint64,
 	io storage.IterOptions,
 ) ([]byte, roachpb.BulkOpSummary, roachpb.Key, error) {
-	return s.r.ExportToSst(startKey, endKey, startTS, endTS, exportAllRevisions, targetSize, maxSize, io)
+	return s.r.ExportToSst(ctx, startKey, endKey, startTS, endTS, exportAllRevisions, targetSize, maxSize, io)
 }
 
 func (s spanSetReader) Get(key storage.MVCCKey) ([]byte, error) {

@@ -418,7 +418,7 @@ func assertEqualKVs(
 			var summary roachpb.BulkOpSummary
 			maxSize := uint64(0)
 			prevStart := start
-			sst, summary, start, err = e.ExportToSst(start, endKey, startTime, endTime,
+			sst, summary, start, err = e.ExportToSst(ctx, start, endKey, startTime, endTime,
 				exportAllRevisions, targetSize, maxSize, io)
 			require.NoError(t, err)
 			loaded := loadSST(t, sst, startKey, endKey)
@@ -457,7 +457,7 @@ func assertEqualKVs(
 				if dataSizeWhenExceeded == maxSize {
 					maxSize--
 				}
-				_, _, _, err = e.ExportToSst(prevStart, endKey, startTime, endTime,
+				_, _, _, err = e.ExportToSst(ctx, prevStart, endKey, startTime, endTime,
 					exportAllRevisions, targetSize, maxSize, io)
 				require.Regexp(t, fmt.Sprintf("export size \\(%d bytes\\) exceeds max size \\(%d bytes\\)",
 					dataSizeWhenExceeded, maxSize), err)

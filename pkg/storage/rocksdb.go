@@ -487,6 +487,7 @@ func (r *RocksDB) Closed() bool {
 
 // ExportToSst is part of the engine.Reader interface.
 func (r *RocksDB) ExportToSst(
+	ctx context.Context,
 	startKey, endKey roachpb.Key,
 	startTS, endTS hlc.Timestamp,
 	exportAllRevisions bool,
@@ -714,13 +715,14 @@ func (r *rocksDBReadOnly) Closed() bool {
 
 // ExportToSst is part of the engine.Reader interface.
 func (r *rocksDBReadOnly) ExportToSst(
+	ctx context.Context,
 	startKey, endKey roachpb.Key,
 	startTS, endTS hlc.Timestamp,
 	exportAllRevisions bool,
 	targetSize, maxSize uint64,
 	io IterOptions,
 ) ([]byte, roachpb.BulkOpSummary, roachpb.Key, error) {
-	return r.parent.ExportToSst(startKey, endKey, startTS, endTS, exportAllRevisions, targetSize, maxSize, io)
+	return r.parent.ExportToSst(ctx, startKey, endKey, startTS, endTS, exportAllRevisions, targetSize, maxSize, io)
 }
 
 func (r *rocksDBReadOnly) Get(key MVCCKey) ([]byte, error) {
@@ -1040,13 +1042,14 @@ func (r *rocksDBSnapshot) Closed() bool {
 
 // ExportToSst is part of the engine.Reader interface.
 func (r *rocksDBSnapshot) ExportToSst(
+	ctx context.Context,
 	startKey, endKey roachpb.Key,
 	startTS, endTS hlc.Timestamp,
 	exportAllRevisions bool,
 	targetSize, maxSize uint64,
 	io IterOptions,
 ) ([]byte, roachpb.BulkOpSummary, roachpb.Key, error) {
-	return r.parent.ExportToSst(startKey, endKey, startTS, endTS, exportAllRevisions, targetSize, maxSize, io)
+	return r.parent.ExportToSst(ctx, startKey, endKey, startTS, endTS, exportAllRevisions, targetSize, maxSize, io)
 }
 
 // Get returns the value for the given key, nil otherwise using
@@ -1454,6 +1457,7 @@ func (r *rocksDBBatch) Closed() bool {
 
 // ExportToSst is part of the engine.Reader interface.
 func (r *rocksDBBatch) ExportToSst(
+	ctx context.Context,
 	startKey, endKey roachpb.Key,
 	startTS, endTS hlc.Timestamp,
 	exportAllRevisions bool,
