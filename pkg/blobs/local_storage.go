@@ -21,6 +21,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/blobs/blobspb"
 	"github.com/cockroachdb/cockroach/pkg/util/fileutil"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/errors"
 )
@@ -73,6 +74,7 @@ func (l *LocalStorage) WriteFile(
 ) (err error) {
 	ctx, span := tracing.ChildSpan(ctx, fmt.Sprintf("writing file %s", filename))
 	defer tracing.FinishSpan(span)
+	log.VEventf(ctx, 1, "writing file %s", filename)
 	fullPath, err := l.prependExternalIODir(filename)
 	if err != nil {
 		return err

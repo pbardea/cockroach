@@ -31,6 +31,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/contextutil"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/retry"
+	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/errors"
 )
 
@@ -255,6 +256,8 @@ func (h *httpStorage) ReadFile(ctx context.Context, basename string) (io.ReadClo
 }
 
 func (h *httpStorage) WriteFile(ctx context.Context, basename string, content io.ReadSeeker) error {
+	ctx, span := tracing.ChildSpan(ctx, fmt.Sprintf("writing file %s", basename))
+	defer tracing.FinishSpan(span)
 	return contextutil.RunWithTimeout(ctx, fmt.Sprintf("PUT %s", basename),
 		timeoutSetting.Get(&h.settings.SV), func(ctx context.Context) error {
 			_, err := h.reqNoBody(ctx, "PUT", basename, content)

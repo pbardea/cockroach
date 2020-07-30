@@ -12,6 +12,7 @@ package cloudimpl
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/url"
 	"path"
@@ -27,6 +28,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/storage/cloud"
 	"github.com/cockroachdb/cockroach/pkg/util/contextutil"
+	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/errors"
 )
 
@@ -154,6 +156,8 @@ func (s *s3Storage) Conf() roachpb.ExternalStorage {
 }
 
 func (s *s3Storage) WriteFile(ctx context.Context, basename string, content io.ReadSeeker) error {
+	ctx, span := tracing.ChildSpan(ctx, fmt.Sprintf("writing file %s", basename))
+	defer tracing.FinishSpan(span)
 	err := contextutil.RunWithTimeout(ctx, "put s3 object",
 		timeoutSetting.Get(&s.settings.SV),
 		func(ctx context.Context) error {
