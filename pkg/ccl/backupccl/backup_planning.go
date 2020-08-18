@@ -577,35 +577,34 @@ func backupPlanHook(
 		// TODO(dt): pull this block and the block below into a `resolveDest` helper
 		// that does all the rewites of `to`/`defaultURI`/etc.
 
-		// chosenSuffix is the automaically chosen suffix within the collection path
-		// if we're backing up INTO a collection.
+		// chosenSuffix is the automatically chosen suffix within the collection
+		// path if we're backing up INTO a collection.
 		var chosenSuffix string
 		var collectionURI string
+		var latestDestinationURI string
 		if backupStmt.Nested {
-			collectionURI = defaultURI
+			latestDestination, err := getLatestDestination(ctx, p, makeCloudStorage, defaultURI)
+			if err != nil {
+				return err
+			}
+
 			if backupStmt.AppendToLatest {
-				collection, err := makeCloudStorage(ctx, collectionURI, p.User())
-				if err != nil {
-					return err
+				// New incremental backup in collection.
+				if latestDestination == "" {
+					return pgerror.Wrapf(err, pgcode.UndefinedFile, "path does not contain a completed latest backup")
 				}
-				defer collection.Close()
-				latestFile, err := collection.ReadFile(ctx, latestFileName)
-				if err != nil {
-					if errors.Is(err, cloudimpl.ErrFileDoesNotExist) {
-						return pgerror.Wrapf(err, pgcode.UndefinedFile, "path does not contain a completed latest backup")
-					}
-					return pgerror.WithCandidateCode(err, pgcode.Io)
-				}
-				latest, err := ioutil.ReadAll(latestFile)
-				if err != nil {
-					return err
-				}
-				if len(latest) == 0 {
-					return errors.Errorf("malformed LATEST file")
-				}
-				chosenSuffix = string(latest)
+				chosenSuffix = latestDestination
 			} else {
+				// New full backup in collection.
 				chosenSuffix = endTime.GoTime().Format(dateBasedFolderName)
+				if latestDestination != "" {
+					// There is a previous full backup in this collection. Let's remember
+					// the URI so that we can compare the descriptor widening.
+					latestDestinationURI, _, err = getURIsByLocalityKV(to, latestDestination)
+					if err != nil {
+						return err
+					}
+				}
 			}
 			defaultURI, urisByLocalityKV, err = getURIsByLocalityKV(to, chosenSuffix)
 			if err != nil {
@@ -616,7 +615,9 @@ func backupPlanHook(
 		var encryption *jobspb.BackupEncryptionOptions
 		var prevBackups []BackupManifest
 		g := ctxgroup.WithContext(ctx)
+		// TODO(pbardea): Refactor this large branch into helpers.
 		if len(incrementalFrom) > 0 {
+			// Explicit incremental locations.
 			if encryptMode != noEncryption {
 				exportStore, err := makeCloudStorage(ctx, incrementalFrom[0], p.User())
 				if err != nil {
@@ -680,6 +681,10 @@ func backupPlanHook(
 				return err
 			}
 			if exists {
+				// TODO(YYY): Factor this out into a helper.
+				//  We'll need to re-use this when comparing 2 full backups in the same
+				//  collection.
+				// Implicit incremental backup.
 				if encryptMode != noEncryption {
 					encOpts, err := readEncryptionOptions(ctx, defaultStore)
 					if err != nil {
@@ -748,6 +753,24 @@ func backupPlanHook(
 				// If we came here because the LATEST file told us to but didn't find an
 				// existing backup here we should raise an error.
 				return pgerror.Newf(pgcode.UndefinedFile, "backup not found in location recorded latest file: %q", chosenSuffix)
+			}
+
+			if latestDestinationURI != "" {
+				// We're making a full backup in a collection that has existing full
+				// backups. We still want to compare descriptors.
+				latestStore, err := makeCloudStorage(ctx, latestDestinationURI, p.User())
+				if err != nil {
+					return err
+				}
+				defer latestStore.Close()
+				exists, err := containsManifest(ctx, latestStore)
+				if err != nil {
+					return err
+				}
+				if !exists {
+					// Throw an error.
+				}
+
 			}
 		}
 
@@ -1093,6 +1116,37 @@ func backupPlanHook(
 		return fn, utilccl.DetachedJobExecutionResultHeader, nil, false, nil
 	}
 	return fn, utilccl.BulkJobExecutionResultHeader, nil, false, nil
+}
+
+// getLatestLocation takes a URI to a backup collection and returns the contents
+// of the LATEST file. If it is not present, this method will return nil rather
+// than an error.
+func getLatestDestination(
+	ctx context.Context,
+	p sql.PlanHookState,
+	makeCloudStorage cloud.ExternalStorageFromURIFactory,
+	collectionURI string,
+) (string, error) {
+	collection, err := makeCloudStorage(ctx, collectionURI, p.User())
+	if err != nil {
+		return "", err
+	}
+	defer collection.Close()
+	latestFile, err := collection.ReadFile(ctx, latestFileName)
+	if err != nil {
+		if errors.Is(err, cloudimpl.ErrFileDoesNotExist) {
+			return "", nil
+		}
+		return "", pgerror.WithCandidateCode(err, pgcode.Io)
+	}
+	latest, err := ioutil.ReadAll(latestFile)
+	if err != nil {
+		return "", err
+	}
+	if len(latest) == 0 {
+		return "", errors.Errorf("malformed LATEST file")
+	}
+	return latest, nil
 }
 
 func getEncryptedDataKeyFromURI(
