@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/url"
 	"os"
 	"path"
@@ -200,22 +201,19 @@ func (f *fileTableStorage) WriteFile(
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	contentTee := io.TeeReader(content, &buf)
+	// Since the transaction that writes the data may retry, we need to read all
+	// of the data upfront.
+	contentBytes, err := ioutil.ReadAll(content)
+	if err != nil {
+		return err
+	}
 	err = f.db.Txn(ctx, func(ctx context.Context, txn *kv.Txn) error {
 		writer, err := f.fs.NewFileWriter(ctx, filepath, filetable.ChunkDefaultSize, txn)
 		if err != nil {
 			return err
 		}
 
-		// Since the txn that writes the data might be retried, we need to keep
-		// track of the data that has been written on previous attempts. We need to
-		// write any data that we've accumulated from previous attempts before
-		// continuing to consume the reader.
-		if _, err = io.Copy(writer, &buf); err != nil {
-			return errors.Wrap(err, "failed to write using the FileTable writer")
-		}
-		if _, err = io.Copy(writer, contentTee); err != nil {
+		if _, err = io.Copy(writer, bytes.NewReader(contentBytes)); err != nil {
 			return errors.Wrap(err, "failed to write using the FileTable writer")
 		}
 
