@@ -999,7 +999,7 @@ func (r *restoreResumer) Resume(
 		return errors.Wrap(err, "inserting table statistics")
 	}
 
-	if err := r.publishTables(ctx); err != nil {
+	if err := r.publishTables(ctx, r.descriptorCoverage); err != nil {
 		return err
 	}
 
@@ -1068,7 +1068,9 @@ func (r *restoreResumer) insertStats(ctx context.Context) error {
 }
 
 // publishTables updates the RESTORED tables status from OFFLINE to PUBLIC.
-func (r *restoreResumer) publishTables(ctx context.Context) error {
+func (r *restoreResumer) publishTables(
+	ctx context.Context, coverage tree.DescriptorCoverage,
+) error {
 	details := r.job.Details().(jobspb.RestoreDetails)
 	if details.TablesPublished {
 		return nil
@@ -1085,13 +1087,19 @@ func (r *restoreResumer) publishTables(ctx context.Context) error {
 			tableDesc := *tbl
 			tableDesc.Version++
 			tableDesc.State = sqlbase.TableDescriptor_PUBLIC
-			// Convert any mutations that were in progress on the table descriptor
-			// when the backup was taken, and convert them to schema change jobs.
-			newJobs, err := createSchemaChangeJobsFromMutations(ctx, r.execCfg.JobRegistry, txn, r.job.Payload().Username, &tableDesc)
-			if err != nil {
-				return err
+			if coverage != tree.AllDescriptors {
+				// We only need to create these jobs when we're not restoring the
+				// original jobs from the old cluster.
+				//
+				// Convert any mutations that were in progress on the table descriptor
+				// when the backup was taken, and convert them to schema change jobs.
+				newJobs, err := createSchemaChangeJobsFromMutations(ctx, r.execCfg.JobRegistry, txn, r.job.Payload().Username, &tableDesc)
+				if err != nil {
+					return err
+				}
+				newSchemaChangeJobs = append(newSchemaChangeJobs, newJobs...)
+				newTables = append(newTables, &tableDesc)
 			}
-			newSchemaChangeJobs = append(newSchemaChangeJobs, newJobs...)
 			existingDescVal, err := sqlbase.ConditionalGetTableDescFromTxn(ctx, txn, tbl)
 			if err != nil {
 				return errors.Wrap(err, "validating table descriptor has not changed")
@@ -1101,7 +1109,6 @@ func (r *restoreResumer) publishTables(ctx context.Context) error {
 				sqlbase.WrapDescriptor(&tableDesc),
 				existingDescVal,
 			)
-			newTables = append(newTables, &tableDesc)
 		}
 
 		if err := txn.Run(ctx, b); err != nil {
