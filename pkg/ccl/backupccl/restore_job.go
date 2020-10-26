@@ -1098,8 +1098,8 @@ func (r *restoreResumer) publishTables(
 					return err
 				}
 				newSchemaChangeJobs = append(newSchemaChangeJobs, newJobs...)
-				newTables = append(newTables, &tableDesc)
 			}
+			newTables = append(newTables, &tableDesc)
 			existingDescVal, err := sqlbase.ConditionalGetTableDescFromTxn(ctx, txn, tbl)
 			if err != nil {
 				return errors.Wrap(err, "validating table descriptor has not changed")
