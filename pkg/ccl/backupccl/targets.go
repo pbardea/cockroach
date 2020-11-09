@@ -771,6 +771,9 @@ func fullClusterTargets(
 				fullClusterDBs = append(fullClusterDBs, dbDesc)
 			}
 		case catalog.TableDescriptor:
+			if desc.IsTemporary() {
+				continue
+			}
 			if desc.GetParentID() == keys.SystemDatabaseID {
 				// Add only the system tables that we plan to include in a full cluster
 				// backup.

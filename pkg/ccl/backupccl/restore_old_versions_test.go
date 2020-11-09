@@ -80,6 +80,71 @@ func TestRestoreOldVersions(t *testing.T) {
 	// versions, but are now disallowed, but we should check that we fail
 	// gracefully with them.
 	t.Run("exceptional-backups", func(t *testing.T) {
+		t.Run("double-temp-table", func(t *testing.T) {
+			backupUnderTest := "doubleTempTable"
+			/*
+						This backup was generated with the following on v20.1.8. On this
+						version, cluster backups included temporary tables. This tests
+				    ensures that they are not restored.
+
+					  On connection 1:
+					  CREATE TEMPORARY TABLE my_temp_table (a int primary key);
+
+					  On connection 2:
+					  CREATE TEMPORARY TABLE my_temp_table (a int primary key);
+					  CREATE DATABASE d1;
+					  CREATE TABLE d1.t1 (a INT);
+					  BACKUP TO 'nodelocal://1/doubleTempTable';
+			*/
+
+			dir, err := os.Stat(filepath.Join(exceptionalDirs, backupUnderTest))
+			require.NoError(t, err)
+			require.True(t, dir.IsDir())
+			exportDir, err := filepath.Abs(filepath.Join(exceptionalDirs, dir.Name()))
+			require.NoError(t, err)
+
+			externalDir, dirCleanup := testutils.TempDir(t)
+			ctx := context.Background()
+			tc := testcluster.StartTestCluster(t, singleNode, base.TestClusterArgs{
+				ServerArgs: base.TestServerArgs{
+					ExternalIODir: externalDir,
+				},
+			})
+			sqlDB := sqlutils.MakeSQLRunner(tc.Conns[0])
+			defer func() {
+				tc.Stopper().Stop(ctx)
+				dirCleanup()
+			}()
+			err = os.Symlink(exportDir, filepath.Join(externalDir, "foo"))
+			require.NoError(t, err)
+
+			// First check cluster restore.
+			sqlDB.Exec(t, `RESTORE FROM 'nodelocal://1/foo'`)
+			sqlDB.CheckQueryResults(t, `
+USE defaultdb;
+SELECT
+  regexp_replace(schema_name, 'pg_temp.*', 'pg_temp') as name
+FROM [SHOW SCHEMAS] ORDER BY name`,
+				[][]string{{"crdb_internal"}, {"information_schema"}, {"pg_catalog"}, {"pg_extension"}, {"public"}})
+			sqlDB.CheckQueryResults(t, `USE defaultdb; SELECT table_name FROM [SHOW TABLES] ORDER BY table_name`,
+				[][]string{})
+			sqlDB.CheckQueryResults(t, `USE d1; SELECT table_name FROM [SHOW TABLES] ORDER BY table_name`,
+				[][]string{{"t1"}})
+
+			// Then database restore.
+			sqlDB.Exec(t, `DROP DATABASE d1; RESTORE DATABASE d1 FROM 'nodelocal://1/foo'`)
+			sqlDB.CheckQueryResults(t, `
+USE defaultdb;
+SELECT
+  regexp_replace(schema_name, 'pg_temp.*', 'pg_temp') as name
+FROM [SHOW SCHEMAS] ORDER BY name`,
+				[][]string{{"crdb_internal"}, {"information_schema"}, {"pg_catalog"}, {"pg_extension"}, {"public"}})
+			sqlDB.CheckQueryResults(t, `USE defaultdb; SELECT table_name FROM [SHOW TABLES] ORDER BY table_name`,
+				[][]string{})
+			sqlDB.CheckQueryResults(t, `USE d1; SELECT table_name FROM [SHOW TABLES] ORDER BY table_name`,
+				[][]string{{"t1"}})
+		})
+
 		t.Run("x-db-type-reference", func(t *testing.T) {
 			backupUnderTest := "xDbRef"
 			/*

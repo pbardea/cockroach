@@ -31,6 +31,10 @@ pg_temp
 public
 
 exec-sql
+BACKUP TO 'nodelocal://0/cluster_backup'
+----
+
+exec-sql
 BACKUP TABLE temp_table TO 'nodelocal://0/temp_table_backup'
 ----
 pq: failed to resolve targets specified in the BACKUP stmt: table "temp_table" does not exist
@@ -71,6 +75,30 @@ USE defaultdb;
 DROP DATABASE d1;
 RESTORE DATABASE d1 FROM 'nodelocal://0/d1_star_backup/';
 USE d1
+----
+
+query-sql
+SELECT
+  regexp_replace(schema_name, 'pg_temp.*', 'pg_temp') AS name
+FROM [SHOW SCHEMAS] ORDER BY name
+----
+crdb_internal
+information_schema
+pg_catalog
+pg_extension
+public
+
+query-sql
+USE d1;
+SELECT table_name FROM [SHOW TABLES] ORDER BY table_name
+----
+perm_table
+
+new-server name=s2 share-io-dir=s1
+----
+
+exec-sql
+RESTORE FROM 'nodelocal://0/cluster_backup'
 ----
 
 query-sql
