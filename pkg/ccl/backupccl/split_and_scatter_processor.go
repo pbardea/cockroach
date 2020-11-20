@@ -11,6 +11,7 @@ package backupccl
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/settings"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/storageccl"
@@ -29,6 +30,12 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/errors"
 )
+
+// featureRestoreEnabled is used to enable and disable the RESTORE feature.
+var presplitLeadLimit = settings.RegisterPublicIntSetting(
+	"restore.buffers.presplitlead",
+	"the size of the buffer after splitting and scattering. 0 indicates unbounded.",
+	0)
 
 type splitAndScatterer interface {
 	// splitAndScatterSpan issues a split request at a given key and then scatters
@@ -161,12 +168,14 @@ func (ssp *splitAndScatterProcessor) Run(ctx context.Context) {
 	defer span.Finish()
 	defer ssp.output.ProducerDone()
 
-	numEntries := 0
-	for _, chunk := range ssp.spec.Chunks {
-		numEntries += len(chunk.Entries)
+	leadLimit := presplitLeadLimit.Get(&ssp.flowCtx.Cfg.Settings.SV)
+	if leadLimit == 0 {
+		// Large enough so that it never blocks.
+		for _, chunk := range ssp.spec.Chunks {
+			leadLimit += int64(len(chunk.Entries))
+		}
 	}
-	// Large enough so that it never blocks.
-	doneScatterCh := make(chan entryNode, numEntries)
+	doneScatterCh := make(chan entryNode, leadLimit)
 
 	// A cache for routing datums, so only 1 is allocated per node.
 	routingDatumCache := make(map[roachpb.NodeID]rowenc.EncDatum)
