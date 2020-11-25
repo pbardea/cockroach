@@ -39,6 +39,9 @@ type restoreDataProcessor struct {
 
 	alloc rowenc.DatumAlloc
 	kr    *storageccl.KeyRewriter
+
+	progCh     chan execinfrapb.RemoteProducerMetadata_BulkProcessorProgress
+	restoreErr error
 }
 
 var _ execinfra.Processor = &restoreDataProcessor{}
@@ -59,6 +62,7 @@ func newRestoreDataProcessor(
 		input:   input,
 		spec:    spec,
 		output:  output,
+		progCh:  make(chan execinfrapb.RemoteProducerMetadata_BulkProcessorProgress),
 	}
 
 	var err error
@@ -79,7 +83,80 @@ func newRestoreDataProcessor(
 // Start is part of the RowSource interface.
 func (rd *restoreDataProcessor) Start(ctx context.Context) context.Context {
 	rd.input.Start(ctx)
+	go func() {
+		rd.restoreErr = rd.runRestore()
+	}()
 	return rd.StartInternal(ctx, restoreDataProcName)
+}
+
+func (rd *restoreDataProcessor) runRestore() error {
+	// We read rows from the SplitAndScatter processor. We expect each row to
+	// contain 2 columns. The first is used to route the row to this processor,
+	// and the second contains the RestoreSpanEntry that we're interested in.
+	for {
+		row, meta := rd.input.Next()
+		// Do we expect to get metadata?
+		// If we do we should send it over a channel or something.
+		if meta != nil {
+			// TODO: Considering erroring if the meta is nil, because we don't expect that.
+			return meta.Err
+		}
+		if row == nil {
+			// Done consuming.
+			return nil
+		}
+
+		if len(row) != 2 {
+			return errors.New("expected input rows to have exactly 2 columns")
+		}
+		if err := row[1].EnsureDecoded(types.Bytes, &rd.alloc); err != nil {
+			return err
+		}
+		datum := row[1].Datum
+		entryDatumBytes, ok := datum.(*tree.DBytes)
+		if !ok {
+			return errors.AssertionFailedf(`unexpected datum type %T: %+v`, datum, row)
+		}
+
+		var entry execinfrapb.RestoreSpanEntry
+		if err := protoutil.Unmarshal([]byte(*entryDatumBytes), &entry); err != nil {
+			return errors.Wrap(err, "un-marshaling restore span entry")
+		}
+
+		newSpanKey, err := rewriteBackupSpanKey(rd.kr, entry.Span.Key)
+		if err != nil {
+			return errors.Wrap(err, "re-writing span key to import")
+		}
+
+		log.VEventf(rd.Ctx, 1 /* level */, "importing span %v", entry.Span)
+		importRequest := &roachpb.ImportRequest{
+			// Import is a point request because we don't want DistSender to split
+			// it. Assume (but don't require) the entire post-rewrite span is on the
+			// same range.
+			RequestHeader: roachpb.RequestHeader{Key: newSpanKey},
+			DataSpan:      entry.Span,
+			Files:         entry.Files,
+			EndTime:       rd.spec.RestoreTime,
+			Rekeys:        rd.spec.Rekeys,
+			Encryption:    rd.spec.Encryption,
+		}
+
+		importRes, pErr := kv.SendWrapped(rd.Ctx, rd.flowCtx.Cfg.DB.NonTransactionalSender(), importRequest)
+		if pErr != nil {
+			return errors.Wrapf(pErr.GoError(), "importing span %v", importRequest.DataSpan)
+		}
+
+		var prog execinfrapb.RemoteProducerMetadata_BulkProcessorProgress
+		progDetails := RestoreProgress{}
+		progDetails.Summary = countRows(importRes.(*roachpb.ImportResponse).Imported, rd.spec.PKIDs)
+		progDetails.ProgressIdx = entry.ProgressIdx
+		progDetails.DataSpan = entry.Span
+		details, err := gogotypes.MarshalAny(&progDetails)
+		if err != nil {
+			return err
+		}
+		prog.ProgressDetails = *details
+	}
 }
 
 // Next is part of the RowSource interface.
@@ -87,79 +164,20 @@ func (rd *restoreDataProcessor) Next() (rowenc.EncDatumRow, *execinfrapb.Produce
 	if rd.State != execinfra.StateRunning {
 		return nil, rd.DrainHelper()
 	}
-	// We read rows from the SplitAndScatter processor. We expect each row to
-	// contain 2 columns. The first is used to route the row to this processor,
-	// and the second contains the RestoreSpanEntry that we're interested in.
-	row, meta := rd.input.Next()
-	if meta != nil {
-		if meta.Err != nil {
-			rd.MoveToDraining(nil /* err */)
-		}
-		return nil, meta
+
+	prog, ok := <-rd.progCh
+	if ok {
+		return nil, &execinfrapb.ProducerMetadata{BulkProcessorProgress: &prog}
 	}
-	if row == nil {
-		rd.MoveToDraining(nil /* err */)
+
+	// Done consuming the channel, check for errors.
+	if rd.restoreErr != nil {
+		rd.MoveToDraining(rd.restoreErr)
 		return nil, rd.DrainHelper()
 	}
 
-	if len(row) != 2 {
-		rd.MoveToDraining(errors.New("expected input rows to have exactly 2 columns"))
-		return nil, rd.DrainHelper()
-	}
-	if err := row[1].EnsureDecoded(types.Bytes, &rd.alloc); err != nil {
-		rd.MoveToDraining(err)
-		return nil, rd.DrainHelper()
-	}
-	datum := row[1].Datum
-	entryDatumBytes, ok := datum.(*tree.DBytes)
-	if !ok {
-		rd.MoveToDraining(errors.AssertionFailedf(`unexpected datum type %T: %+v`, datum, row))
-		return nil, rd.DrainHelper()
-	}
-
-	var entry execinfrapb.RestoreSpanEntry
-	if err := protoutil.Unmarshal([]byte(*entryDatumBytes), &entry); err != nil {
-		rd.MoveToDraining(errors.Wrap(err, "un-marshaling restore span entry"))
-		return nil, rd.DrainHelper()
-	}
-
-	newSpanKey, err := rewriteBackupSpanKey(rd.kr, entry.Span.Key)
-	if err != nil {
-		rd.MoveToDraining(errors.Wrap(err, "re-writing span key to import"))
-		return nil, rd.DrainHelper()
-	}
-
-	log.VEventf(rd.Ctx, 1 /* level */, "importing span %v", entry.Span)
-	importRequest := &roachpb.ImportRequest{
-		// Import is a point request because we don't want DistSender to split
-		// it. Assume (but don't require) the entire post-rewrite span is on the
-		// same range.
-		RequestHeader: roachpb.RequestHeader{Key: newSpanKey},
-		DataSpan:      entry.Span,
-		Files:         entry.Files,
-		EndTime:       rd.spec.RestoreTime,
-		Rekeys:        rd.spec.Rekeys,
-		Encryption:    rd.spec.Encryption,
-	}
-
-	importRes, pErr := kv.SendWrapped(rd.Ctx, rd.flowCtx.Cfg.DB.NonTransactionalSender(), importRequest)
-	if pErr != nil {
-		rd.MoveToDraining(errors.Wrapf(pErr.GoError(), "importing span %v", importRequest.DataSpan))
-		return nil, rd.DrainHelper()
-	}
-
-	var prog execinfrapb.RemoteProducerMetadata_BulkProcessorProgress
-	progDetails := RestoreProgress{}
-	progDetails.Summary = countRows(importRes.(*roachpb.ImportResponse).Imported, rd.spec.PKIDs)
-	progDetails.ProgressIdx = entry.ProgressIdx
-	progDetails.DataSpan = entry.Span
-	details, err := gogotypes.MarshalAny(&progDetails)
-	if err != nil {
-		rd.MoveToDraining(err)
-		return nil, rd.DrainHelper()
-	}
-	prog.ProgressDetails = *details
-	return nil, &execinfrapb.ProducerMetadata{BulkProcessorProgress: &prog}
+	rd.MoveToDraining(nil /* err */)
+	return nil, rd.DrainHelper()
 }
 
 // ConsumerClosed is part of the RowSource interface.
