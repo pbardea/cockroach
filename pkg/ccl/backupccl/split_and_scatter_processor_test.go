@@ -19,7 +19,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
-	descpb "github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowflow"
@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/testutils/testcluster"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,6 +37,8 @@ type mockScatterer struct {
 	curNode  int
 	numNodes int
 }
+
+var _ splitAndScatterer = &mockScatterer{}
 
 // This mock implementation of the split and scatterer simulates a scattering of
 // ranges.
@@ -47,6 +50,18 @@ func (s *mockScatterer) splitAndScatterKey(
 	targetNodeID := roachpb.NodeID(s.curNode + 1)
 	s.curNode = (s.curNode + 1) % s.numNodes
 	return targetNodeID, nil
+}
+
+const errorScattererMessage = "this scatterer always errors"
+
+type errorScatterer struct{}
+
+var _ splitAndScatterer = &errorScatterer{}
+
+func (s *errorScatterer) splitAndScatterKey(
+	_ context.Context, _ *kv.DB, _ *storageccl.KeyRewriter, _ roachpb.Key, _ bool,
+) (roachpb.NodeID, error) {
+	return 0, errors.New(errorScattererMessage)
 }
 
 // TestSplitAndScatterProcessor does not test the underlying split and scatter
@@ -210,75 +225,8 @@ func TestSplitAndScatterProcessor(t *testing.T) {
 
 	for _, c := range testCases {
 		t.Run(fmt.Sprintf("%d-streams/%d-chunks", c.numStreams, len(c.procSpec.Chunks)), func(t *testing.T) {
-			defaultStream := int32(0)
-			rangeRouterSpec := execinfrapb.OutputRouterSpec_RangeRouterSpec{
-				Encodings: []execinfrapb.OutputRouterSpec_RangeRouterSpec_ColumnEncoding{
-					{
-						Column:   0,
-						Encoding: descpb.DatumEncoding_ASCENDING_KEY,
-					},
-				},
-				DefaultDest: &defaultStream,
-			}
-			for stream := 0; stream < c.numStreams; stream++ {
-				// In this test, nodes are 1 indexed.
-				startBytes, endBytes, err := routingSpanForNode(roachpb.NodeID(stream + 1))
-				require.NoError(t, err)
-
-				span := execinfrapb.OutputRouterSpec_RangeRouterSpec_Span{
-					Start:  startBytes,
-					End:    endBytes,
-					Stream: int32(stream),
-				}
-				rangeRouterSpec.Spans = append(rangeRouterSpec.Spans, span)
-			}
-
-			routerSpec := execinfrapb.OutputRouterSpec{
-				Type:            execinfrapb.OutputRouterSpec_BY_RANGE,
-				RangeRouterSpec: rangeRouterSpec,
-			}
-			bufs := make([]*distsqlutils.RowBuffer, c.numStreams)
-			recvs := make([]execinfra.RowReceiver, c.numStreams)
-			routerSpec.Streams = make([]execinfrapb.StreamEndpointSpec, c.numStreams)
-
-			for i := 0; i < c.numStreams; i++ {
-				bufs[i] = &distsqlutils.RowBuffer{}
-				recvs[i] = bufs[i]
-				routerSpec.Streams[i] = execinfrapb.StreamEndpointSpec{StreamID: execinfrapb.StreamID(i)}
-			}
-
-			st := cluster.MakeTestingClusterSettings()
-			evalCtx := tree.MakeTestingEvalContext(st)
-
-			testDiskMonitor := execinfra.NewTestDiskMonitor(ctx, st)
-			defer testDiskMonitor.Stop(ctx)
-
-			flowCtx := execinfra.FlowCtx{
-				Cfg: &execinfra.ServerConfig{
-					Settings:    st,
-					DB:          kvDB,
-					DiskMonitor: testDiskMonitor,
-				},
-				EvalCtx: &evalCtx,
-			}
-
-			colTypes := splitAndScatterOutputTypes
-			var wg sync.WaitGroup
-			out, err := rowflow.MakeTestRouter(ctx, &flowCtx, &routerSpec, recvs, colTypes, &wg)
-			require.NoError(t, err)
-
-			proc, err := newSplitAndScatterProcessor(&flowCtx, 0 /* processorID */, c.procSpec, out)
-			require.NoError(t, err)
-			ssp, ok := proc.(*splitAndScatterProcessor)
-			if !ok {
-				t.Fatal("expected the processor that's created to be a split and scatter processor")
-			}
-
-			// Inject a mock scatterer.
-			ssp.scatterer = &mockScatterer{numNodes: c.numNodes}
-
-			ssp.Run(context.Background())
-			wg.Wait()
+			scatterer := &mockScatterer{numNodes: c.numNodes}
+			bufs := runTestSplitAndScatterProcessor(ctx, t, kvDB, c.numStreams, c.procSpec, scatterer)
 
 			// Ensure that all the outputs are properly closed.
 			for _, buf := range bufs {
@@ -313,4 +261,140 @@ func TestSplitAndScatterProcessor(t *testing.T) {
 			require.Equal(t, expectedEntries, receivedEntriesCount)
 		})
 	}
+}
+
+func TestSplitAndScatterError(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx := context.Background()
+	tc := testcluster.StartTestCluster(t, 3 /* nodes */, base.TestClusterArgs{})
+	defer tc.Stopper().Stop(context.Background())
+	kvDB := tc.Server(0).DB()
+
+	procSpec := execinfrapb.SplitAndScatterSpec{
+		Chunks: []execinfrapb.SplitAndScatterSpec_RestoreEntryChunk{
+			{
+				Entries: []execinfrapb.RestoreSpanEntry{
+					{Span: roachpb.Span{Key: roachpb.Key("a"), EndKey: roachpb.Key("b")}},
+					{Span: roachpb.Span{Key: roachpb.Key("c"), EndKey: roachpb.Key("d")}},
+					{Span: roachpb.Span{Key: roachpb.Key("e"), EndKey: roachpb.Key("f")}},
+					{Span: roachpb.Span{Key: roachpb.Key("g"), EndKey: roachpb.Key("h")}},
+					{Span: roachpb.Span{Key: roachpb.Key("i"), EndKey: roachpb.Key("j")}},
+					{Span: roachpb.Span{Key: roachpb.Key("k"), EndKey: roachpb.Key("l")}},
+					{Span: roachpb.Span{Key: roachpb.Key("m"), EndKey: roachpb.Key("n")}},
+				},
+			},
+		},
+	}
+	numStreams := 4
+
+	scatterer := &errorScatterer{}
+	bufs := runTestSplitAndScatterProcessor(ctx, t, kvDB, numStreams, procSpec, scatterer)
+
+	// Ensure that all the outputs are properly closed.
+	for _, buf := range bufs {
+		if !buf.ProducerClosed() {
+			t.Fatalf("output RowReceiver not closed")
+		}
+	}
+
+	// Check that the error gets propogated back up to the source.
+	for _, buf := range bufs {
+		row, meta := buf.Next()
+		require.Nil(t, row)
+		require.NotNil(t, meta)
+		require.NotNil(t, meta.Err)
+		require.Equal(t, errorScattererMessage, meta.Err.Error())
+
+		row, meta = buf.Next()
+		require.Nil(t, row)
+		require.Nil(t, meta)
+	}
+}
+
+// runTestSplitAndScatterProcessor creates the streams and a split and scatter processor
+// with the specified number of streams and the given spec. It returns a RowBuffer that
+// can read the output of the processor.
+func runTestSplitAndScatterProcessor(
+	ctx context.Context,
+	t *testing.T,
+	kvDB *kv.DB,
+	numStreams int,
+	procSpec execinfrapb.SplitAndScatterSpec,
+	mockScatterer splitAndScatterer,
+) []*distsqlutils.RowBuffer {
+	defaultStream := int32(0)
+	rangeRouterSpec := execinfrapb.OutputRouterSpec_RangeRouterSpec{
+		Encodings: []execinfrapb.OutputRouterSpec_RangeRouterSpec_ColumnEncoding{
+			{
+				Column:   0,
+				Encoding: descpb.DatumEncoding_ASCENDING_KEY,
+			},
+		},
+		DefaultDest: &defaultStream,
+	}
+	for stream := 0; stream < numStreams; stream++ {
+		// In this test, nodes are 1 indexed.
+		startBytes, endBytes, err := routingSpanForNode(roachpb.NodeID(stream + 1))
+		require.NoError(t, err)
+
+		span := execinfrapb.OutputRouterSpec_RangeRouterSpec_Span{
+			Start:  startBytes,
+			End:    endBytes,
+			Stream: int32(stream),
+		}
+		rangeRouterSpec.Spans = append(rangeRouterSpec.Spans, span)
+	}
+
+	routerSpec := execinfrapb.OutputRouterSpec{
+		Type:            execinfrapb.OutputRouterSpec_BY_RANGE,
+		RangeRouterSpec: rangeRouterSpec,
+	}
+	bufs := make([]*distsqlutils.RowBuffer, numStreams)
+	recvs := make([]execinfra.RowReceiver, numStreams)
+	routerSpec.Streams = make([]execinfrapb.StreamEndpointSpec, numStreams)
+
+	for i := 0; i < numStreams; i++ {
+		bufs[i] = &distsqlutils.RowBuffer{}
+		recvs[i] = bufs[i]
+		routerSpec.Streams[i] = execinfrapb.StreamEndpointSpec{StreamID: execinfrapb.StreamID(i)}
+	}
+
+	st := cluster.MakeTestingClusterSettings()
+	evalCtx := tree.MakeTestingEvalContext(st)
+
+	testDiskMonitor := execinfra.NewTestDiskMonitor(ctx, st)
+	defer testDiskMonitor.Stop(ctx)
+
+	flowCtx := execinfra.FlowCtx{
+		Cfg: &execinfra.ServerConfig{
+			Settings:    st,
+			DB:          kvDB,
+			DiskMonitor: testDiskMonitor,
+		},
+		EvalCtx: &evalCtx,
+	}
+
+	colTypes := splitAndScatterOutputTypes
+	var wg sync.WaitGroup
+	out, err := rowflow.MakeTestRouter(ctx, &flowCtx, &routerSpec, recvs, colTypes, &wg)
+	require.NoError(t, err)
+
+	proc, err := newSplitAndScatterProcessor(&flowCtx, 0 /* processorID */, procSpec, out)
+	require.NoError(t, err)
+
+	ssp, ok := proc.(*splitAndScatterProcessor)
+	if !ok {
+		t.Fatal("expected the processor that's created to be a split and scatter processor")
+	}
+
+	if mockScatterer != nil {
+		// Inject a mock scatterer.
+		ssp.scatterer = mockScatterer
+	}
+
+	ssp.Run(context.Background())
+	wg.Wait()
+
+	return bufs
 }
