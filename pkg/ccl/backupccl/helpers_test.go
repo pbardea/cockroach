@@ -32,6 +32,8 @@ const (
 	backupRestoreDefaultRanges  = 10
 	backupRestoreRowPayloadSize = 100
 	LocalFoo                    = "nodelocal://0/foo"
+
+	uploadInBackupProcessorProbability = 0.5
 )
 
 func backupRestoreTestSetupWithParams(
@@ -65,6 +67,10 @@ func backupRestoreTestSetupWithParams(
 
 	sqlDB = sqlutils.MakeSQLRunner(tc.Conns[0])
 	sqlDB.Exec(t, `CREATE DATABASE data`)
+	if rng.Float32() < uploadInBackupProcessorProbability {
+		// Randomly choose to upload the file in the processor rather than the KV request.
+		sqlDB.Exec(t, `SET CLUSTER SETTING bulkio.backup.experimental_write_in_processor = true`)
+	}
 	l := workloadsql.InsertsDataLoader{BatchSize: 1000, Concurrency: 4}
 	if _, err := workloadsql.Setup(ctx, sqlDB.DB.(*gosql.DB), bankData, l); err != nil {
 		t.Fatalf("%+v", err)

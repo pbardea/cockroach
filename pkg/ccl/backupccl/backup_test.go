@@ -84,8 +84,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+var rng *rand.Rand
+
 func init() {
 	cloud.RegisterKMSFromURIFactory(MakeTestKMS, "testkms")
+	rng, _ = randutil.NewPseudoRand()
 }
 
 type sqlDBKey struct {

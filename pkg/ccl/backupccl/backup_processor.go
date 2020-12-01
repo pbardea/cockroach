@@ -9,6 +9,7 @@
 package backupccl
 
 import (
+	"bytes"
 	"context"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowexec"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
+	"github.com/cockroachdb/cockroach/pkg/storage/cloud"
 	"github.com/cockroachdb/cockroach/pkg/storage/cloudimpl"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	hlc "github.com/cockroachdb/cockroach/pkg/util/hlc"
@@ -31,6 +33,14 @@ import (
 	"github.com/cockroachdb/errors"
 	gogotypes "github.com/gogo/protobuf/types"
 )
+
+// writeSSTInKV controls whether the KV layer is responsible for writing the SST file,
+// or if that happens within the backup processors. Tenant backups always write the
+// file at the processor level.
+var writeSSTInKV = settings.RegisterBoolSetting(
+	"bulkio.backup.experimental_write_in_processor",
+	"set to true to write SST files from the SQL layer, this will always be the case for tenants; default is false",
+	false)
 
 var backupOutputTypes = []*types.T{}
 
@@ -127,6 +137,10 @@ func runBackupProcessor(
 	progCh chan execinfrapb.RemoteProducerMetadata_BulkProcessorProgress,
 ) error {
 	settings := flowCtx.Cfg.Settings
+	// If this is a tenant backup, we need to write the file from the appropriate
+	// SQL tenant. We might also do this if the relevant cluster setting is
+	// enabled.
+	writeSSTInProcessor := writeSSTInKV.Get(&settings.SV) || !flowCtx.Cfg.Codec.ForSystemTenant()
 
 	todo := make(chan spanAndTime, len(spec.Spans)+len(spec.IntroducedSpans))
 	for _, s := range spec.IntroducedSpans {
@@ -147,13 +161,27 @@ func runBackupProcessor(
 	if err != nil {
 		return err
 	}
-	storageByLocalityKV := make(map[string]*roachpb.ExternalStorage)
+	defaultStore, err := flowCtx.Cfg.ExternalStorage(ctx, defaultConf)
+	if err != nil {
+		return err
+	}
+
+	storageConfByLocalityKV := make(map[string]*roachpb.ExternalStorage)
+	storeByLocalityKV := make(map[string]cloud.ExternalStorage)
 	for kv, uri := range spec.URIsByLocalityKV {
 		conf, err := cloudimpl.ExternalStorageConfFromURI(uri, spec.User())
 		if err != nil {
 			return err
 		}
-		storageByLocalityKV[kv] = &conf
+		storageConfByLocalityKV[kv] = &conf
+
+		localityStore, err := flowCtx.Cfg.ExternalStorage(ctx, conf)
+		if err != nil {
+			return err
+		}
+		defer localityStore.Close()
+
+		storeByLocalityKV[kv] = localityStore
 	}
 
 	return ctxgroup.GroupWorkers(ctx, numSenders, func(ctx context.Context, _ int) error {
@@ -177,12 +205,13 @@ func runBackupProcessor(
 				req := &roachpb.ExportRequest{
 					RequestHeader:                       roachpb.RequestHeaderFromSpan(span.span),
 					Storage:                             defaultConf,
-					StorageByLocalityKV:                 storageByLocalityKV,
+					StorageByLocalityKV:                 storageConfByLocalityKV,
 					StartTime:                           span.start,
 					EnableTimeBoundIteratorOptimization: useTBI.Get(&settings.SV),
 					MVCCFilter:                          spec.MVCCFilter,
 					Encryption:                          spec.Encryption,
 					TargetFileSize:                      targetFileSize,
+					ReturnSST:                           writeSSTInProcessor,
 				}
 
 				// If we're doing re-attempts but are not yet in the priority regime,
@@ -235,11 +264,29 @@ func runBackupProcessor(
 					return errors.Wrapf(pErr.GoError(), "exporting %s", span.span)
 				}
 				res := rawRes.(*roachpb.ExportResponse)
-				files := make([]BackupManifest_File, 0)
+
 				var prog execinfrapb.RemoteProducerMetadata_BulkProcessorProgress
 				progDetails := BackupManifest_Progress{}
 				progDetails.RevStartTime = res.StartTime
+
+				// TODO: Add some helper like getFiles(res)
+				files := make([]BackupManifest_File, 0)
 				for _, file := range res.Files {
+					if writeSSTInProcessor {
+						data := file.SST
+						locality := file.LocalityKV
+
+						exportStore := defaultStore
+						if localitySpecificStore, ok := storeByLocalityKV[locality]; ok {
+							exportStore = localitySpecificStore
+						}
+
+						if err := exportStore.WriteFile(ctx, file.Path, bytes.NewReader(data)); err != nil {
+							log.VEventf(ctx, 1, "failed to put file: %+v", err)
+							return errors.Wrap(err, "writing SST")
+						}
+					}
+
 					f := BackupManifest_File{
 						Span:        file.Span,
 						Path:        file.Path,
@@ -253,6 +300,7 @@ func runBackupProcessor(
 					}
 					files = append(files, f)
 				}
+
 				progDetails.Files = files
 				details, err := gogotypes.MarshalAny(&progDetails)
 				if err != nil {
