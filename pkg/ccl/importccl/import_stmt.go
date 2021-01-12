@@ -27,6 +27,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobsprotectedts"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/batcheval"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/protectedts"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security"
@@ -1675,7 +1676,7 @@ func (r *importResumer) dropTables(
 		tableSpan := empty[i].TableSpan(execCfg.Codec)
 		var err error
 
-		for d := time.Millisecond * 25; d < time.Minute; d *= 2 {
+		for d := time.Nanosecond * 1; d < time.Nanosecond*2; d *= 2 {
 			offlineUntil.Forward(execCfg.Clock.Now().Add(d.Nanoseconds(), 0))
 			log.VEventf(ctx, 2, "ClearRange %s - %s (deadline +%s)", tableSpan.Key, tableSpan.EndKey, d)
 			var b kv.Batch
@@ -1691,6 +1692,9 @@ func (r *importResumer) dropTables(
 				break
 			}
 			if strings.Contains(err.Error(), "ClearRange has deadline") {
+				if errors.Is(err, batcheval.DeadlineExceededSentinel) {
+					panic("error detected")
+				}
 				log.VEventf(ctx, 2, "ClearRange hit deadline, trying again")
 				continue
 			}

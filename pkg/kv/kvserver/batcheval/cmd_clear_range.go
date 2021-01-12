@@ -12,6 +12,7 @@ package batcheval
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/batcheval/result"
@@ -30,6 +31,18 @@ import (
 // deletion. Otherwise, will revert to iterating through the values
 // and clearing them individually with engine.Clear.
 const ClearRangeBytesThreshold = 512 << 10 // 512KiB
+
+type deadlineExceededError string
+
+func (r deadlineExceededError) Error() string {
+	return string(r)
+}
+
+var DeadlineExceededSentinel = deadlineExceededError("")
+
+func NewDeadlineExceededError(s string) error {
+	return errors.Mark(deadlineExceededError(s), DeadlineExceededSentinel)
+}
 
 func init() {
 	RegisterReadWriteCommand(roachpb.ClearRange, declareKeysClearRange, ClearRange)
@@ -70,7 +83,7 @@ func ClearRange(
 
 	if !args.Deadline.IsEmpty() {
 		if now := cArgs.EvalCtx.Clock().Now(); args.Deadline.LessEq(now) {
-			return result.Result{}, errors.Errorf("ClearRange has deadline %s <= %s", args.Deadline, now)
+			return result.Result{}, NewDeadlineExceededError(fmt.Sprintf("ClearRange has deadline %s <= %s", args.Deadline, now))
 		}
 	}
 
