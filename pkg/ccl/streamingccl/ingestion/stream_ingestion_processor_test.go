@@ -101,14 +101,15 @@ func TestStreamIngestionProcessor(t *testing.T) {
 	v := roachpb.MakeValueFromString("value_1")
 	v.Timestamp = hlc.Timestamp{WallTime: 1}
 	sampleKV := roachpb.KeyValue{Key: roachpb.Key("key_1"), Value: v}
+	span := roachpb.Span{Key: sampleKV.Key, EndKey: sampleKV.Key.PrefixEnd()}
 	sip.client = &mockStreamClient{
 		partitionEvents: []streamingccl.Event{
 			streamingccl.MakeKVEvent(sampleKV),
 			streamingccl.MakeKVEvent(sampleKV),
-			streamingccl.MakeCheckpointEvent(hlc.Timestamp{WallTime: 1}),
+			streamingccl.MakeCheckpointEvent(span, hlc.Timestamp{WallTime: 1}),
 			streamingccl.MakeKVEvent(sampleKV),
 			streamingccl.MakeKVEvent(sampleKV),
-			streamingccl.MakeCheckpointEvent(hlc.Timestamp{WallTime: 4}),
+			streamingccl.MakeCheckpointEvent(span, hlc.Timestamp{WallTime: 4}),
 		},
 	}
 

@@ -15,7 +15,7 @@ type StreamAddress string
 // PartitionAddress is the address where the stream client should be able to
 // read the events produced by a partition of a stream.
 //
-// Each partition will emit events for a fixed span of keys.
+// Each partition will emit events for a fixed Span of keys.
 type PartitionAddress string
 
 // Topology is a configuration of stream partitions. These are particular to a

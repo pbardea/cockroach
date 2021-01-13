@@ -21,7 +21,7 @@ const (
 	// needs to be ingested.
 	KVEvent EventType = iota
 	// CheckpointEvent indicates that GetResolved will be meaningful. The resolved
-	// timestamp indicates that all KVs have been emitted up to this timestamp.
+	// Timestamp indicates that all KVs have been emitted up to this Timestamp.
 	CheckpointEvent
 )
 
@@ -33,10 +33,17 @@ type Event interface {
 
 	// GetKV returns a KV event if the EventType is KVEvent.
 	GetKV() *roachpb.KeyValue
-	// GetResolved returns a resolved timestamp if the EventType is
-	// CheckpointEvent. The resolved timestamp indicates that all KV events until
+	// GetResolved returns a resolved Timestamp if the EventType is
+	// CheckpointEvent. The resolved Timestamp indicates that all KV events until
 	// this time have been emitted.
-	GetResolved() *hlc.Timestamp
+	GetResolved() *ResolvedSpan
+}
+
+// ResolvedSpan is the type of event that marks a specified span as resolved.
+// TODO: Should this be a jobspb.ResolvedSpan.
+type ResolvedSpan struct {
+	Span      roachpb.Span
+	Timestamp hlc.Timestamp
 }
 
 // kvEvent is a key value pair that needs to be ingested.
@@ -57,13 +64,14 @@ func (kve kvEvent) GetKV() *roachpb.KeyValue {
 }
 
 // GetResolved implements the Event interface.
-func (kve kvEvent) GetResolved() *hlc.Timestamp {
+func (kve kvEvent) GetResolved() *ResolvedSpan {
 	return nil
 }
 
 // checkpointEvent indicates that the stream has emitted every change for all
-// keys in the span it is responsible for up until this timestamp.
+// keys in the Span it is responsible for up until this Timestamp.
 type checkpointEvent struct {
+	span              roachpb.Span
 	resolvedTimestamp hlc.Timestamp
 }
 
@@ -80,8 +88,11 @@ func (ce checkpointEvent) GetKV() *roachpb.KeyValue {
 }
 
 // GetResolved implements the Event interface.
-func (ce checkpointEvent) GetResolved() *hlc.Timestamp {
-	return &ce.resolvedTimestamp
+func (ce checkpointEvent) GetResolved() *ResolvedSpan {
+	return &ResolvedSpan{
+		Span:      ce.span,
+		Timestamp: ce.resolvedTimestamp,
+	}
 }
 
 // MakeKVEvent creates an Event from a KV.
@@ -89,7 +100,7 @@ func MakeKVEvent(kv roachpb.KeyValue) Event {
 	return kvEvent{kv: kv}
 }
 
-// MakeCheckpointEvent creates an Event from a resolved timestamp.
-func MakeCheckpointEvent(resolvedTimestamp hlc.Timestamp) Event {
-	return checkpointEvent{resolvedTimestamp: resolvedTimestamp}
+// MakeCheckpointEvent creates an Event from a resolved Timestamp.
+func MakeCheckpointEvent(span roachpb.Span, resolvedTimestamp hlc.Timestamp) Event {
+	return checkpointEvent{span: span, resolvedTimestamp: resolvedTimestamp}
 }

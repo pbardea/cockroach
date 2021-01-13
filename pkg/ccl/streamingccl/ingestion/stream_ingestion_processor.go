@@ -18,7 +18,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/ccl/streamingccl/streamclient"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/kv/bulk"
-	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
@@ -184,6 +183,9 @@ func (sip *streamIngestionProcessor) startIngestion(eventCh chan partitionEvent)
 		switch event.Type() {
 		case streamingccl.KVEvent:
 			kv := event.GetKV()
+			if kv == nil {
+				return errors.New("kv event was expected to have a kv pair")
+			}
 			mvccKey := storage.MVCCKey{
 				Key:       kv.Key,
 				Timestamp: kv.Value.Timestamp,
@@ -196,21 +198,16 @@ func (sip *streamIngestionProcessor) startIngestion(eventCh chan partitionEvent)
 			// TODO: Add a setting to control the max flush-rate. This would be a time
 			// interval to allow us to limit the number of flushes we do on
 			// checkpoints.
-			resolvedTimePtr := event.GetResolved()
-			if resolvedTimePtr == nil {
+			resolvedSpan := event.GetResolved()
+			if resolvedSpan == nil {
 				return errors.New("checkpoint event was expected to have a resolved timestamp")
 			}
-			resolvedTime := *resolvedTimePtr
 			if err := sip.flush(); err != nil {
 				return err
 			}
-			spanStartKey := roachpb.Key(event.partition)
 			sip.progressCh <- jobspb.ResolvedSpan{
-				Span: roachpb.Span{
-					Key:    spanStartKey,
-					EndKey: spanStartKey.Next(),
-				},
-				Timestamp: resolvedTime,
+				Span:      resolvedSpan.Span,
+				Timestamp: resolvedSpan.Timestamp,
 			}
 		default:
 			return errors.Newf("unknown streaming event type %v", event.Type())

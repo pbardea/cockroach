@@ -44,10 +44,11 @@ func (sc testStreamClient) ConsumePartition(
 			Timestamp: hlc.Timestamp{WallTime: 1},
 		},
 	}
+	span := roachpb.Span{Key: sampleKV.Key, EndKey: sampleKV.Key.PrefixEnd()}
 
 	events := make(chan streamingccl.Event, 100)
 	events <- streamingccl.MakeKVEvent(sampleKV)
-	events <- streamingccl.MakeCheckpointEvent(hlc.Timestamp{WallTime: timeutil.Now().UnixNano()})
+	events <- streamingccl.MakeCheckpointEvent(span, hlc.Timestamp{WallTime: timeutil.Now().UnixNano()})
 	close(events)
 
 	return events, nil
