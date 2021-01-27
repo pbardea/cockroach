@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
+	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
@@ -60,6 +61,8 @@ type chunkBackfiller interface {
 // backfiller is a processor that implements a distributed backfill of
 // an entity, like indexes or columns, during a schema change.
 type backfiller struct {
+	execinfra.ProcessorBase
+
 	chunks chunkBackfiller
 	// name is the name of the kind of entity this backfiller processes.
 	name string
@@ -78,6 +81,24 @@ type backfiller struct {
 func (*backfiller) OutputTypes() []*types.T {
 	// No output types.
 	return nil
+}
+
+// backfiller Does not have any results types.
+var backfillerResultTypes []*types.T = nil
+
+var _ execinfra.Processor = &streamIngestionProcessor{}
+var _ execinfra.RowSource = &streamIngestionProcessor{}
+
+func (b *backfiller) Start(ctx context.Context) context.Context {
+
+}
+
+func (b *backfiller) Next() (rowenc.EncDatumRow, *execinfrapb.ProducerMetadata) {
+
+}
+
+func (b *backfiller) ConsumerClosed() {
+	b.InternalClose()
 }
 
 // Run is part of the Processor interface.
