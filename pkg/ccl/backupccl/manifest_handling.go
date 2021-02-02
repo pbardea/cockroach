@@ -183,6 +183,7 @@ func readBackupManifest(
 	}
 	defer r.Close()
 	descBytes, err := ioutil.ReadAll(r)
+	log.Infof(ctx, "reading bytes from file %s, bytes %x", filename, descBytes)
 	if err != nil {
 		return BackupManifest{}, err
 	}
@@ -217,6 +218,7 @@ func readBackupManifest(
 		if err != nil {
 			return BackupManifest{}, err
 		}
+		log.Infof(ctx, "decrypting data %x", descBytes)
 		descBytes, err = storageccl.DecryptFile(descBytes, encryptionKey)
 		if err != nil {
 			return BackupManifest{}, err
@@ -225,6 +227,7 @@ func readBackupManifest(
 
 	fileType := http.DetectContentType(descBytes)
 	if fileType == ZipType {
+		log.Infof(ctx, "decompressing data %x", descBytes)
 		descBytes, err = decompressData(descBytes)
 		if err != nil {
 			return BackupManifest{}, errors.Wrap(
@@ -354,11 +357,13 @@ func writeBackupManifest(
 	if err != nil {
 		return err
 	}
+	log.Infof(ctx, "got bytese %x after unmarshalling", descBuf)
 
 	descBuf, err = compressData(descBuf)
 	if err != nil {
 		return errors.Wrap(err, "compressing backup manifest")
 	}
+	log.Infof(ctx, "data after compressing %x", descBuf)
 
 	if encryption != nil {
 		encryptionKey, err := getEncryptionKey(ctx, encryption, settings, exportStore.ExternalIOConf())
@@ -369,8 +374,10 @@ func writeBackupManifest(
 		if err != nil {
 			return err
 		}
+		log.Infof(ctx, "data after encrypting %x", descBuf)
 	}
 
+	log.Infof(ctx, "writing %x", descBuf)
 	if err := exportStore.WriteFile(ctx, filename, bytes.NewReader(descBuf)); err != nil {
 		return err
 	}
