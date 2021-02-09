@@ -114,13 +114,6 @@ func TestStreamIngestionProcessor(t *testing.T) {
 		startTime, nil /* interceptEvents */, mockClient)
 	require.NoError(t, err)
 
-	// Compare the set of results since the ordering is not guaranteed.
-	expectedRows := map[string]struct{}{
-		"partition1{-\\x00} 0.000000001,0": {},
-		"partition1{-\\x00} 0.000000004,0": {},
-		"partition2{-\\x00} 0.000000001,0": {},
-		"partition2{-\\x00} 0.000000004,0": {},
-	}
 	actualRows := make(map[string]struct{})
 	for {
 		row := out.NextNoMeta(t)
@@ -137,7 +130,13 @@ func TestStreamIngestionProcessor(t *testing.T) {
 		actualRows[fmt.Sprintf("%s %s", resolvedSpan.Span, resolvedSpan.Timestamp)] = struct{}{}
 	}
 
-	require.Equal(t, expectedRows, actualRows)
+	// Only compare the latest advancement, since not all resolved timestamps
+	// might be flushed (due to the minimum flush interval steting in the
+	// ingestion processor).
+	require.Contains(t, actualRows, "partition1{-\\x00} 0.000000004,0",
+		"partition 1 should advance to timestamp 4")
+	require.Contains(t, actualRows, "partition2{-\\x00} 0.000000004,0",
+		"partition 2 should advance to timestamp 4")
 }
 
 func getPartitionSpanToTableID(
@@ -234,10 +233,10 @@ func TestRandomClientGeneration(t *testing.T) {
 
 	makeTestStreamURI := func(
 		valueRange, kvsPerResolved, numPartitions int,
-		kvFrequency time.Duration, dupProbability float64,
+		eventFrequency time.Duration, dupProbability float64,
 	) string {
 		return "test:///" + "?VALUE_RANGE=" + strconv.Itoa(valueRange) +
-			"&KV_FREQUENCY=" + strconv.Itoa(int(kvFrequency)) +
+			"&EVENT_FREQUENCY=" + strconv.Itoa(int(eventFrequency)) +
 			"&KVS_PER_CHECKPOINT=" + strconv.Itoa(kvsPerResolved) +
 			"&NUM_PARTITIONS=" + strconv.Itoa(numPartitions) +
 			"&DUP_PROBABILITY=" + strconv.FormatFloat(dupProbability, 'f', -1, 32)
@@ -249,13 +248,15 @@ func TestRandomClientGeneration(t *testing.T) {
 	conn := tc.Conns[0]
 	sqlDB := sqlutils.MakeSQLRunner(conn)
 
+	sqlDB.Exec(t, `SET CLUSTER SETTING bulkio.stream_ingestion.minimum_flush_interval='1 microsecond'`)
+
 	// TODO: Consider testing variations on these parameters.
 	valueRange := 100
-	kvsPerResolved := 1_000
-	kvFrequency := 50 * time.Nanosecond
+	kvsPerResolved := 10
+	eventFrequency := 50 * time.Nanosecond
 	numPartitions := 4
 	dupProbability := 0.2
-	streamAddr := makeTestStreamURI(valueRange, kvsPerResolved, numPartitions, kvFrequency,
+	streamAddr := makeTestStreamURI(valueRange, kvsPerResolved, numPartitions, eventFrequency,
 		dupProbability)
 
 	// The random client returns system and table data partitions.
@@ -269,8 +270,8 @@ func TestRandomClientGeneration(t *testing.T) {
 	startTime := hlc.Timestamp{WallTime: timeutil.Now().UnixNano()}
 
 	ctx, cancel := context.WithCancel(ctx)
-	// Cancel the flow after emitting 1000 checkpoint events from the client.
-	cancelAfterCheckpoints := makeCheckpointEventCounter(1000, cancel)
+	// Cancel the flow after emitting 100 checkpoint events from the client.
+	cancelAfterCheckpoints := makeCheckpointEventCounter(10, cancel)
 	streamValidator := cdctest.NewStreamClientValidatorWrapper()
 	validator := registerValidator(streamValidator.GetValidator())
 	out, err := runStreamIngestionProcessor(ctx, t, kvDB, streamAddr, topo.Partitions,
