@@ -886,6 +886,16 @@ func spansForAllRestoreTableIndexes(
 	return spans
 }
 
+func shouldPreRestore(table *tabledesc.Mutable) bool {
+	for systemTableName := range backupbase.GetSystemTablesToRestoreBeforeData() {
+		if table.GetParentID() == keys.SystemDatabaseID && table.GetName() == systemTableName {
+			return true
+		}
+	}
+
+	return false
+}
+
 // createImportingDescriptors create the tables that we will restore into. It also
 // fetches the information from the old tables that we need for the restore.
 func createImportingDescriptors(
@@ -894,7 +904,7 @@ func createImportingDescriptors(
 	backupCodec keys.SQLCodec,
 	sqlDescs []catalog.Descriptor,
 	r *restoreResumer,
-) (*restoreDataBundle, error) {
+) ([]*restoreDataBundle, error) {
 	details := r.job.Details().(jobspb.RestoreDetails)
 
 	var databases []catalog.DatabaseDescriptor
@@ -908,14 +918,24 @@ func createImportingDescriptors(
 	var mutableTables []*tabledesc.Mutable
 	var mutableDatabases []*dbdesc.Mutable
 
-	tables := make([]catalog.TableDescriptor, 0)
 	oldTableIDs := make([]descpb.ID, 0)
-	spans := make([]roachpb.Span, 0)
+
+	tables := make([]catalog.TableDescriptor, 0)
+	postRestoreTables := make([]catalog.TableDescriptor, 0)
+	postRestoreSpans := make([]roachpb.Span, 0)
+
+	preRestoreTables := make([]catalog.TableDescriptor, 0)
+	preRestoreSpans := make([]roachpb.Span, 0)
 
 	for _, desc := range sqlDescs {
 		switch desc := desc.(type) {
 		case catalog.TableDescriptor:
 			mut := tabledesc.NewCreatedMutable(*desc.TableDesc())
+			if shouldPreRestore(mut) {
+				preRestoreTables = append(preRestoreTables, mut)
+			} else {
+				postRestoreTables = append(postRestoreTables, mut)
+			}
 			tables = append(tables, mut)
 			mutableTables = append(mutableTables, mut)
 			oldTableIDs = append(oldTableIDs, mut.GetID())
@@ -943,7 +963,8 @@ func createImportingDescriptors(
 
 	// We get the spans of the restoring tables _as they appear in the backup_,
 	// that is, in the 'old' keyspace, before we reassign the table IDs.
-	spans = spansForAllRestoreTableIndexes(backupCodec, tables, nil)
+	preRestoreSpans = spansForAllRestoreTableIndexes(backupCodec, preRestoreTables, nil)
+	postRestoreSpans = spansForAllRestoreTableIndexes(backupCodec, postRestoreTables, nil)
 
 	log.Eventf(ctx, "starting restore for %d tables", len(mutableTables))
 
@@ -1017,6 +1038,14 @@ func createImportingDescriptors(
 	}
 	for _, desc := range mutableDatabases {
 		desc.SetOffline("restoring")
+	}
+
+	if tempSystemDBID != descpb.InvalidID {
+		for _, desc := range mutableTables {
+			if desc.GetParentID() == tempSystemDBID {
+				desc.SetPublic()
+			}
+		}
 	}
 
 	// Collect all types after they have had their ID's rewritten.
@@ -1273,8 +1302,14 @@ func createImportingDescriptors(
 		pkIDs[roachpb.BulkOpSummaryID(uint64(tbl.GetID()), uint64(tbl.GetPrimaryIndexID()))] = true
 	}
 
+	dataToPreRestore := &restoreDataBundle{
+		spans:  preRestoreSpans,
+		rekeys: rekeys,
+		pkIDs:  pkIDs,
+	}
+
 	dataToRestore := &restoreDataBundle{
-		spans:  spans,
+		spans:  postRestoreSpans,
 		rekeys: rekeys,
 		pkIDs:  pkIDs,
 	}
@@ -1286,7 +1321,7 @@ func createImportingDescriptors(
 			}
 		}
 	}
-	return dataToRestore, nil
+	return []*restoreDataBundle{dataToPreRestore, dataToRestore}, nil
 }
 
 // Resume is part of the jobs.Resumer interface.
@@ -1334,7 +1369,7 @@ func (r *restoreResumer) Resume(ctx context.Context, execCtx interface{}) error 
 		return err
 	}
 
-	dataToRestore, err := createImportingDescriptors(ctx, p, backupCodec, sqlDescs, r)
+	dataSetsToRestore, err := createImportingDescriptors(ctx, p, backupCodec, sqlDescs, r)
 	if err != nil {
 		return err
 	}
@@ -1389,21 +1424,41 @@ func (r *restoreResumer) Resume(ctx context.Context, execCtx interface{}) error 
 	}
 
 	for _, tenant := range details.Tenants {
-		dataToRestore.addTenant(roachpb.MakeTenantID(tenant.ID))
+		// FIXME: This assignment...
+		dataSetsToRestore[len(dataSetsToRestore)-1].addTenant(roachpb.MakeTenantID(tenant.ID))
 	}
 
-	res, err := restore(
-		ctx,
-		p,
-		backupManifests,
-		details.BackupLocalityInfo,
-		details.EndTime,
-		dataToRestore,
-		r.job,
-		details.Encryption,
-	)
-	if err != nil {
-		return err
+	var resTotal RowCount
+	for _, dataToRestore := range dataSetsToRestore {
+		res, err := restore(
+			ctx,
+			p,
+			backupManifests,
+			details.BackupLocalityInfo,
+			details.EndTime,
+			dataToRestore,
+			r.job,
+			details.Encryption,
+		)
+		if err != nil {
+			return err
+		}
+
+		resTotal.add(res)
+
+		if details.DescriptorCoverage == tree.AllDescriptors {
+			if err := r.restoreSystemTables(ctx, p.ExecCfg().DB, details, dataToRestore.systemTables); err != nil {
+				return err
+			}
+			// Reload the details as we may have updated the job.
+			details = r.job.Details().(jobspb.RestoreDetails)
+		}
+	}
+
+	if details.DescriptorCoverage == tree.AllDescriptors {
+		if err := r.cleanupTempSystemTables(ctx); err != nil {
+			return err
+		}
 	}
 
 	if err := insertStats(ctx, r.job, p.ExecCfg(), latestStats); err != nil {
@@ -1437,18 +1492,7 @@ func (r *restoreResumer) Resume(ctx context.Context, execCtx interface{}) error 
 
 	r.notifyStatsRefresherOfNewTables()
 
-	// TODO(pbardea): This was part of the original design where full cluster
-	// restores were a special case, but really we should be making only the
-	// temporary system tables public before we restore all the system table data.
-	if details.DescriptorCoverage == tree.AllDescriptors {
-		if err := r.restoreSystemTables(ctx, p.ExecCfg().DB, details, dataToRestore.systemTables); err != nil {
-			return err
-		}
-	}
-	// Reload the details as we may have updated the job.
-	details = r.job.Details().(jobspb.RestoreDetails)
-
-	r.restoreStats = res
+	r.restoreStats = resTotal
 
 	// Collect telemetry.
 	{
@@ -1463,7 +1507,7 @@ func (r *restoreResumer) Resume(ctx context.Context, execCtx interface{}) error 
 
 		telemetry.Count("restore.total.succeeded")
 		const mb = 1 << 20
-		sizeMb := res.DataSize / mb
+		sizeMb := resTotal.DataSize / mb
 		sec := int64(timeutil.Since(timeutil.FromUnixMicros(r.job.Payload().StartedMicros)).Seconds())
 		var mbps int64
 		if sec > 0 {
@@ -2073,9 +2117,6 @@ func (r *restoreResumer) restoreSystemTables(
 		details.SystemTablesRestored = make(map[string]bool)
 	}
 
-	executor := r.execCfg.InternalExecutor
-	var err error
-
 	// Iterate through all the tables that we're restoring, and if it was restored
 	// to the temporary system DB then copy it's data over to the real system
 	// table.
@@ -2124,14 +2165,18 @@ func (r *restoreResumer) restoreSystemTables(
 		}
 	}
 
+	return nil
+}
+
+func (r *restoreResumer) cleanupTempSystemTables(ctx context.Context) error {
+	executor := r.execCfg.InternalExecutor
 	// After restoring the system tables, drop the temporary database holding the
 	// system tables.
 	dropTableQuery := fmt.Sprintf("DROP DATABASE %s CASCADE", restoreTempSystemDB)
-	_, err = executor.Exec(ctx, "drop-temp-system-db" /* opName */, nil /* txn */, dropTableQuery)
+	_, err := executor.Exec(ctx, "drop-temp-system-db" /* opName */, nil /* txn */, dropTableQuery)
 	if err != nil {
 		return errors.Wrap(err, "dropping temporary system db")
 	}
-
 	return nil
 }
 
