@@ -487,18 +487,39 @@ func rewriteBackupSpanKey(
 	return newKey, nil
 }
 
+type restoreDataBundle struct {
+	// spans is the spans included in this bundle.
+	spans []roachpb.Span
+	// rekeys maps old table IDs to their new table descriptor.
+	rekeys []roachpb.ImportRequest_TableRekey
+	// pkIDs stores the ID of the primary keys for all of the tables that we're
+	// restoring for RowCount calculation.
+	pkIDs map[uint64]bool
+
+	// systemTables store the system tables that need to be restored for cluster
+	// backups. Should be nil otherwise.
+	systemTables []catalog.TableDescriptor
+}
+
+func (b *restoreDataBundle) isEmpty() bool {
+	return len(b.spans) == 0
+}
+
+// addTenant extends the set of data needed to restore to include a new tenant.
+func (b *restoreDataBundle) addTenant(tenantID roachpb.TenantID) {
+	prefix := keys.MakeTenantPrefix(tenantID)
+	b.spans = append(b.spans, roachpb.Span{Key: prefix, EndKey: prefix.PrefixEnd()})
+}
+
 // restore imports a SQL table (or tables) from sets of non-overlapping sstable
 // files.
 func restore(
 	restoreCtx context.Context,
 	execCtx sql.JobExecContext,
-	numClusterNodes int,
 	backupManifests []BackupManifest,
 	backupLocalityInfo []jobspb.RestoreDetails_BackupLocalityInfo,
 	endTime hlc.Timestamp,
-	tables []catalog.TableDescriptor,
-	oldTableIDs []descpb.ID,
-	spans []roachpb.Span,
+	dataToRestore *restoreDataBundle,
 	job *jobs.Job,
 	encryption *jobspb.BackupEncryptionOptions,
 ) (RowCount, error) {
@@ -508,8 +529,8 @@ func restore(
 	// out work get their individual contexts.
 	emptyRowCount := RowCount{}
 
-	// If there weren't any spans requested, then return early.
-	if len(spans) == 0 {
+	// If there isn't any data to restore, then return early.
+	if dataToRestore.isEmpty() {
 		return emptyRowCount, nil
 	}
 
@@ -522,25 +543,10 @@ func restore(
 		highWaterMark: -1,
 	}
 
-	// Get TableRekeys to use when importing raw data.
-	var rekeys []roachpb.ImportRequest_TableRekey
-	for i := range tables {
-		tableToSerialize := tables[i]
-		newDescBytes, err := protoutil.Marshal(tableToSerialize.DescriptorProto())
-		if err != nil {
-			return mu.res, errors.NewAssertionErrorWithWrappedErrf(err,
-				"marshaling descriptor")
-		}
-		rekeys = append(rekeys, roachpb.ImportRequest_TableRekey{
-			OldID:   uint32(oldTableIDs[i]),
-			NewDesc: newDescBytes,
-		})
-	}
-
 	// Pivot the backups, which are grouped by time, into requests for import,
 	// which are grouped by keyrange.
 	highWaterMark := job.Progress().Details.(*jobspb.Progress_Restore).Restore.HighWater
-	importSpans, _, err := makeImportSpans(spans, backupManifests, backupLocalityInfo,
+	importSpans, _, err := makeImportSpans(dataToRestore.spans, backupManifests, backupLocalityInfo,
 		highWaterMark, user, errOnMissingRange)
 	if err != nil {
 		return emptyRowCount, errors.Wrapf(err, "making import requests for %d backups", len(backupManifests))
@@ -564,11 +570,6 @@ func restore(
 				log.Errorf(progressedCtx, "job payload had unexpected type %T", d)
 			}
 		})
-
-	pkIDs := make(map[uint64]bool)
-	for _, tbl := range tables {
-		pkIDs[roachpb.BulkOpSummaryID(uint64(tbl.GetID()), uint64(tbl.GetPrimaryIndexID()))] = true
-	}
 
 	g := ctxgroup.WithContext(restoreCtx)
 
@@ -634,9 +635,9 @@ func restore(
 		restoreCtx,
 		execCtx,
 		importSpanChunks,
-		pkIDs,
+		dataToRestore.pkIDs,
 		encryption,
-		rekeys,
+		dataToRestore.rekeys,
 		endTime,
 		progCh,
 	); err != nil {
@@ -893,7 +894,7 @@ func createImportingDescriptors(
 	backupCodec keys.SQLCodec,
 	sqlDescs []catalog.Descriptor,
 	r *restoreResumer,
-) (tables []catalog.TableDescriptor, oldTableIDs []descpb.ID, spans []roachpb.Span, err error) {
+) (*restoreDataBundle, error) {
 	details := r.job.Details().(jobspb.RestoreDetails)
 
 	var databases []catalog.DatabaseDescriptor
@@ -906,6 +907,10 @@ func createImportingDescriptors(
 	// tables as the slice of interfaces.
 	var mutableTables []*tabledesc.Mutable
 	var mutableDatabases []*dbdesc.Mutable
+
+	tables := make([]catalog.TableDescriptor, 0)
+	oldTableIDs := make([]descpb.ID, 0)
+	spans := make([]roachpb.Span, 0)
 
 	for _, desc := range sqlDescs {
 		switch desc := desc.(type) {
@@ -929,8 +934,9 @@ func createImportingDescriptors(
 		}
 	}
 
+	tempSystemDBID := descpb.InvalidID
 	if details.DescriptorCoverage == tree.AllDescriptors {
-		tempSystemDBID := getTempSystemDBID(details)
+		tempSystemDBID = getTempSystemDBID(details)
 		databases = append(databases, dbdesc.NewInitial(tempSystemDBID, restoreTempSystemDB,
 			security.AdminRoleName()))
 	}
@@ -943,7 +949,7 @@ func createImportingDescriptors(
 
 	// Assign new IDs to the database descriptors.
 	if err := rewriteDatabaseDescs(mutableDatabases, details.DescriptorRewrites); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	databaseDescs := make([]*descpb.DatabaseDescriptor, len(mutableDatabases))
 	for i, database := range mutableDatabases {
@@ -955,7 +961,7 @@ func createImportingDescriptors(
 	if err := RewriteTableDescs(
 		mutableTables, details.DescriptorRewrites, details.OverrideDB,
 	); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	tableDescs := make([]*descpb.TableDescriptor, len(mutableTables))
 	for i, table := range mutableTables {
@@ -980,7 +986,7 @@ func createImportingDescriptors(
 
 	// Assign new IDs to all of the type descriptors that need to be written.
 	if err := rewriteTypeDescs(typesToWrite, details.DescriptorRewrites); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	// Collect all schemas that are going to be restored.
@@ -996,7 +1002,7 @@ func createImportingDescriptors(
 	}
 
 	if err := rewriteSchemaDescs(schemasToWrite, details.DescriptorRewrites); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	// Set the new descriptors' states to offline.
@@ -1236,18 +1242,51 @@ func createImportingDescriptors(
 				return err
 			})
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, err
 		}
 
 		// Wait for one version on any existing changed types.
 		for existing := range existingTypeIDs {
 			if err := sql.WaitToUpdateLeases(ctx, p.ExecCfg().LeaseManager, existing); err != nil {
-				return nil, nil, nil, err
+				return nil, err
 			}
 		}
 	}
 
-	return tables, oldTableIDs, spans, nil
+	// Get TableRekeys to use when importing raw data.
+	var rekeys []roachpb.ImportRequest_TableRekey
+	for i := range tables {
+		tableToSerialize := tables[i]
+		newDescBytes, err := protoutil.Marshal(tableToSerialize.DescriptorProto())
+		if err != nil {
+			return nil, errors.NewAssertionErrorWithWrappedErrf(err,
+				"marshaling descriptor")
+		}
+		rekeys = append(rekeys, roachpb.ImportRequest_TableRekey{
+			OldID:   uint32(oldTableIDs[i]),
+			NewDesc: newDescBytes,
+		})
+	}
+
+	pkIDs := make(map[uint64]bool)
+	for _, tbl := range tables {
+		pkIDs[roachpb.BulkOpSummaryID(uint64(tbl.GetID()), uint64(tbl.GetPrimaryIndexID()))] = true
+	}
+
+	dataToRestore := &restoreDataBundle{
+		spans:  spans,
+		rekeys: rekeys,
+		pkIDs:  pkIDs,
+	}
+
+	if tempSystemDBID != descpb.InvalidID {
+		for _, table := range tables {
+			if table.GetParentID() == tempSystemDBID {
+				dataToRestore.systemTables = append(dataToRestore.systemTables, table)
+			}
+		}
+	}
+	return dataToRestore, nil
 }
 
 // Resume is part of the jobs.Resumer interface.
@@ -1295,7 +1334,7 @@ func (r *restoreResumer) Resume(ctx context.Context, execCtx interface{}) error 
 		return err
 	}
 
-	tables, oldTableIDs, spans, err := createImportingDescriptors(ctx, p, backupCodec, sqlDescs, r)
+	dataToRestore, err := createImportingDescriptors(ctx, p, backupCodec, sqlDescs, r)
 	if err != nil {
 		return err
 	}
@@ -1349,30 +1388,17 @@ func (r *restoreResumer) Resume(ctx context.Context, execCtx interface{}) error 
 		return nil
 	}
 
-	numClusterNodes, err := clusterNodeCount(p.ExecCfg().Gossip)
-	if err != nil {
-		if !build.IsRelease() && p.ExecCfg().Codec.ForSystemTenant() {
-			return err
-		}
-		log.Warningf(ctx, "unable to determine cluster node count: %v", err)
-		numClusterNodes = 1
-	}
-
 	for _, tenant := range details.Tenants {
-		prefix := keys.MakeTenantPrefix(roachpb.MakeTenantID(tenant.ID))
-		spans = append(spans, roachpb.Span{Key: prefix, EndKey: prefix.PrefixEnd()})
+		dataToRestore.addTenant(roachpb.MakeTenantID(tenant.ID))
 	}
 
 	res, err := restore(
 		ctx,
 		p,
-		numClusterNodes,
 		backupManifests,
 		details.BackupLocalityInfo,
 		details.EndTime,
-		tables,
-		oldTableIDs,
-		spans,
+		dataToRestore,
 		r.job,
 		details.Encryption,
 	)
@@ -1415,7 +1441,7 @@ func (r *restoreResumer) Resume(ctx context.Context, execCtx interface{}) error 
 	// restores were a special case, but really we should be making only the
 	// temporary system tables public before we restore all the system table data.
 	if details.DescriptorCoverage == tree.AllDescriptors {
-		if err := r.restoreSystemTables(ctx, p.ExecCfg().DB, details, tables); err != nil {
+		if err := r.restoreSystemTables(ctx, p.ExecCfg().DB, details, dataToRestore.systemTables); err != nil {
 			return err
 		}
 	}
@@ -1426,6 +1452,15 @@ func (r *restoreResumer) Resume(ctx context.Context, execCtx interface{}) error 
 
 	// Collect telemetry.
 	{
+		numClusterNodes, err := clusterNodeCount(p.ExecCfg().Gossip)
+		if err != nil {
+			if !build.IsRelease() {
+				return err
+			}
+			log.Warningf(ctx, "unable to determine cluster node count: %v", err)
+			numClusterNodes = 1
+		}
+
 		telemetry.Count("restore.total.succeeded")
 		const mb = 1 << 20
 		sizeMb := res.DataSize / mb
