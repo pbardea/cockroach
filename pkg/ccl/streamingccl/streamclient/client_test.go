@@ -38,8 +38,8 @@ func (sc testStreamClient) GetTopology(
 
 // ConsumePartition implements the Client interface.
 func (sc testStreamClient) ConsumePartition(
-	_ context.Context, _ streamingccl.PartitionAddress, _ time.Time,
-) (chan streamingccl.Event, error) {
+	ctx context.Context, _ streamingccl.PartitionAddress, _ time.Time,
+) (chan streamingccl.Event, chan error, error) {
 	sampleKV := roachpb.KeyValue{
 		Key: []byte("key_1"),
 		Value: roachpb.Value{
@@ -53,7 +53,16 @@ func (sc testStreamClient) ConsumePartition(
 	events <- streamingccl.MakeCheckpointEvent(hlc.Timestamp{WallTime: 100})
 	close(events)
 
-	return events, nil
+	errCh := make(chan error)
+	go func() {
+		select {
+		case <-ctx.Done():
+			errCh <- ctx.Err()
+			close(errCh)
+		}
+	}()
+
+	return events, errCh, nil
 }
 
 // ExampleClientUsage serves as documentation to indicate how a stream
@@ -68,25 +77,38 @@ func ExampleClient() {
 	startTimestamp := timeutil.Now()
 
 	for _, partition := range topology.Partitions {
-		eventCh, err := client.ConsumePartition(context.Background(), partition, startTimestamp)
+		ctx, stopIngesting := context.WithCancel(context.Background())
+		eventCh, errCh, err := client.ConsumePartition(ctx, partition, startTimestamp)
 		if err != nil {
 			panic(err)
 		}
 
-		// This example looks for the closing of the channel to terminate the test,
-		// but an ingestion job should look for another event such as the user
-		// cutting over to the new cluster to move to the next stage.
-		for event := range eventCh {
-			switch event.Type() {
-			case streamingccl.KVEvent:
-				kv := event.GetKV()
-				fmt.Printf("%s->%s@%d\n", kv.Key.String(), string(kv.Value.RawBytes), kv.Value.Timestamp.WallTime)
-			case streamingccl.CheckpointEvent:
-				fmt.Printf("resolved %d\n", event.GetResolved().WallTime)
-			default:
-				panic(fmt.Sprintf("unexpected event type %v", event.Type()))
+		func() {
+			for {
+				select {
+				case event, ok := <-eventCh:
+					if !ok {
+						// This example looks for the closing of the event channel to terminate the
+						// client, but an ingestion job should look for another event such as the
+						// user cutting over to the new cluster to move to the next stage.
+						stopIngesting()
+						return
+					}
+					switch event.Type() {
+					case streamingccl.KVEvent:
+						kv := event.GetKV()
+						fmt.Printf("%s->%s@%d\n", kv.Key.String(), string(kv.Value.RawBytes), kv.Value.Timestamp.WallTime)
+					case streamingccl.CheckpointEvent:
+						fmt.Printf("resolved %d\n", event.GetResolved().WallTime)
+					default:
+						panic(fmt.Sprintf("unexpected event type %v", event.Type()))
+					}
+				case err := <-errCh:
+					fmt.Printf("got error: %v", err)
+					return
+				}
 			}
-		}
+		}()
 	}
 
 	// Output:
@@ -112,12 +134,15 @@ func TestImplementationsCloseChannel(t *testing.T) {
 
 	for _, impl := range impls {
 		ctx, cancel := context.WithCancel(context.Background())
-		eventCh, err := impl.ConsumePartition(ctx, "test://53/", timeutil.Now())
+		eventCh, errCh, err := impl.ConsumePartition(ctx, "test://53/", timeutil.Now())
 		require.NoError(t, err)
 
 		// Ensure that the eventCh closes when the context is canceled.
 		cancel()
 		for range eventCh {
+		}
+		for err := range errCh {
+			require.Error(t, err, "context canceled")
 		}
 	}
 }

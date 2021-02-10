@@ -152,8 +152,9 @@ func (m *randomStreamClient) GetTopology(
 // ConsumePartition implements the Client interface.
 func (m *randomStreamClient) ConsumePartition(
 	ctx context.Context, _ streamingccl.PartitionAddress, startTime time.Time,
-) (chan streamingccl.Event, error) {
+) (chan streamingccl.Event, chan error, error) {
 	eventCh := make(chan streamingccl.Event)
+	errCh := make(chan error, 1)
 	now := timeutil.Now()
 	if startTime.After(now) {
 		panic("cannot start random stream client event stream in the future")
@@ -197,6 +198,8 @@ func (m *randomStreamClient) ConsumePartition(
 			select {
 			case eventCh <- event:
 			case <-ctx.Done():
+				errCh <- ctx.Err()
+				close(errCh)
 				return
 			}
 
@@ -212,7 +215,7 @@ func (m *randomStreamClient) ConsumePartition(
 		}
 	}()
 
-	return eventCh, nil
+	return eventCh, errCh, nil
 }
 
 func (m *randomStreamClient) makeRandomKey(r *rand.Rand, minTs time.Time) roachpb.KeyValue {

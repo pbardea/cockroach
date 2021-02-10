@@ -30,11 +30,14 @@ func (m *mockClient) GetTopology(_ streamingccl.StreamAddress) (streamingccl.Top
 // ConsumePartition implements the Client interface.
 func (m *mockClient) ConsumePartition(
 	ctx context.Context, _ streamingccl.PartitionAddress, _ time.Time,
-) (chan streamingccl.Event, error) {
+) (chan streamingccl.Event, chan error, error) {
 	eventCh := make(chan streamingccl.Event)
+	errCh := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
+		errCh <- ctx.Err()
+		close(errCh)
 		close(eventCh)
 	}()
-	return eventCh, nil
+	return eventCh, errCh, nil
 }

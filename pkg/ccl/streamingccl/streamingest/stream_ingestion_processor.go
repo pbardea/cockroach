@@ -11,7 +11,6 @@ package streamingest
 import (
 	"context"
 	"sort"
-	"sync"
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/storageccl"
 	"github.com/cockroachdb/cockroach/pkg/ccl/streamingccl"
@@ -29,6 +28,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
+	"golang.org/x/sync/errgroup"
 )
 
 var streamIngestionResultTypes = []*types.T{
@@ -130,14 +130,16 @@ func (sip *streamIngestionProcessor) Start(ctx context.Context) context.Context 
 
 	startTime := timeutil.Unix(0 /* sec */, sip.spec.StartTime.WallTime)
 	eventChs := make(map[streamingccl.PartitionAddress]chan streamingccl.Event)
+	errChs := make(map[streamingccl.PartitionAddress]chan error)
 	for _, partitionAddress := range sip.spec.PartitionAddresses {
-		eventCh, err := sip.client.ConsumePartition(ctx, partitionAddress, startTime)
+		eventCh, errCh, err := sip.client.ConsumePartition(ctx, partitionAddress, startTime)
 		if err != nil {
 			sip.ingestionErr = errors.Wrapf(err, "consuming partition %v", partitionAddress)
 		}
 		eventChs[partitionAddress] = eventCh
+		errChs[partitionAddress] = errCh
 	}
-	sip.eventCh = merge(ctx, eventChs)
+	sip.eventCh = sip.mergeEvents(ctx, eventChs, errChs)
 
 	return ctx
 }
@@ -207,37 +209,50 @@ func (sip *streamIngestionProcessor) flush() error {
 	return sip.batcher.Reset(sip.Ctx)
 }
 
-// merge takes events from all the streams and merges them into a single
+// mergeEvents takes events from all the streams and merges them into a single
 // channel.
-func merge(
-	ctx context.Context, partitionStreams map[streamingccl.PartitionAddress]chan streamingccl.Event,
+func (sip *streamIngestionProcessor) mergeEvents(
+	ctx context.Context,
+	partitionStreams map[streamingccl.PartitionAddress]chan streamingccl.Event,
+	partitionErrors map[streamingccl.PartitionAddress]chan error,
 ) chan partitionEvent {
 	merged := make(chan partitionEvent)
 
-	var wg sync.WaitGroup
-	wg.Add(len(partitionStreams))
+	g, gctx := errgroup.WithContext(ctx)
 
 	for partition, eventCh := range partitionStreams {
-		go func(partition streamingccl.PartitionAddress, eventCh <-chan streamingccl.Event) {
-			defer wg.Done()
-			for event := range eventCh {
-				pe := partitionEvent{
-					Event:     event,
-					partition: partition,
-				}
-
+		partition := partition
+		eventCh := eventCh
+		errCh := partitionErrors[partition]
+		g.Go(func() error {
+			ctxDone := gctx.Done()
+			for {
 				select {
-				case merged <- pe:
-				case <-ctx.Done():
-					// TODO: Add ctx.Err() to an error channel once ConsumePartition
-					// supports an error ch.
-					return
+				case event, ok := <-eventCh:
+					if !ok {
+						return nil
+					}
+
+					pe := partitionEvent{
+						Event:     event,
+						partition: partition,
+					}
+
+					select {
+					case merged <- pe:
+					case <-ctxDone:
+						return gctx.Err()
+					}
+				case <-ctxDone:
+					return gctx.Err()
+				case err := <-errCh:
+					return err
 				}
 			}
-		}(partition, eventCh)
+		})
 	}
 	go func() {
-		wg.Wait()
+		sip.ingestionErr = g.Wait()
 		close(merged)
 	}()
 
