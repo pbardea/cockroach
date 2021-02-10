@@ -22,6 +22,38 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
+type streamContext struct {
+	context.Context
+
+	cutoverCh chan struct{}
+	customErr error
+}
+
+func (sc *streamContext) Done() <-chan struct{} {
+	c := make(chan struct{})
+	go func() {
+		select {
+		case <-sc.Context.Done():
+			c <- struct{}{}
+		case <-sc.cutoverCh:
+			c <- struct{}{}
+		}
+	}()
+	return c
+}
+
+func (sc *streamContext) Err() error {
+	if sc.customErr == nil {
+		return sc.Context.Err()
+	}
+	return sc.customErr
+}
+
+func (sc *streamContext) Cutover() {
+	sc.customErr = errors.Wrap(context.Canceled, "cutover requested")
+	sc.cutoverCh <- struct{}{}
+}
+
 type streamIngestionResumer struct {
 	job *jobs.Job
 }
