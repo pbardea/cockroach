@@ -19,6 +19,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/errors"
 )
 
@@ -109,6 +110,7 @@ func (s *streamIngestionResumer) OnFailOrCancel(ctx context.Context, execCtx int
 		}
 		resolvedTime = *highWatermark
 	}
+	log.Infof(ctx, "reverting to %v, which is after start time %v", resolvedTime, details.StartTime)
 	var b kv.Batch
 	b.AddRawRequest(&roachpb.RevertRangeRequest{
 		RequestHeader: roachpb.RequestHeader{

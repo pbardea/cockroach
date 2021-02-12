@@ -248,7 +248,7 @@ func TestRandomClientGeneration(t *testing.T) {
 	conn := tc.Conns[0]
 	sqlDB := sqlutils.MakeSQLRunner(conn)
 
-	sqlDB.Exec(t, `SET CLUSTER SETTING bulkio.stream_ingestion.minimum_flush_interval='1 microsecond'`)
+	//sqlDB.Exec(t, `SET CLUSTER SETTING bulkio.stream_ingestion.minimum_flush_interval='1 microsecond'`)
 
 	// TODO: Consider testing variations on these parameters.
 	valueRange := 100
@@ -271,7 +271,7 @@ func TestRandomClientGeneration(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(ctx)
 	// Cancel the flow after emitting 100 checkpoint events from the client.
-	cancelAfterCheckpoints := makeCheckpointEventCounter(10, cancel)
+	cancelAfterCheckpoints := makeCheckpointEventCounter(100, cancel)
 	streamValidator := cdctest.NewStreamClientValidatorWrapper()
 	validator := registerValidator(streamValidator.GetValidator())
 	out, err := runStreamIngestionProcessor(ctx, t, kvDB, streamAddr, topo.Partitions,

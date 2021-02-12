@@ -19,11 +19,13 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security"
+	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/testcluster"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,8 +41,6 @@ func TestStreamIngestionJobRollBack(t *testing.T) {
 	defer tc.Stopper().Stop(ctx)
 	registry := tc.Server(0).JobRegistry().(*jobs.Registry)
 	sqlDB := sqlutils.MakeSQLRunner(tc.ServerConn(0))
-
-	sqlDB.Exec(t, `SET CLUSTER SETTING bulkio.stream_ingestion.minimum_flush_interval='1 microsecond'`)
 
 	// Load some initial data in the table. We're going to rollback to this time.
 	sqlDB.Exec(t, `CREATE TABLE foo AS SELECT * FROM generate_series(0, 100);`)
@@ -77,5 +77,13 @@ func TestStreamIngestionJobRollBack(t *testing.T) {
 	// Cancel the job and expect the table to have the same number of rows as it
 	// did at the start.
 	sqlDB.Exec(t, "CANCEL JOB $1", j.ID())
+	testutils.SucceedsSoon(t, func() error {
+		status, err := j.CurrentStatus(ctx)
+		require.NoError(t, err)
+		if status != jobs.StatusCanceled {
+			return errors.Newf("expected job to be in status %s, got %s", jobs.StatusCanceled, status)
+		}
+		return nil
+	})
 	sqlDB.CheckQueryResultsRetry(t, "SELECT count(*) FROM foo", [][]string{{"101"}})
 }

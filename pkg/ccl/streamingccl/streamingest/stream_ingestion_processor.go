@@ -29,7 +29,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/storage"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
-	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
@@ -139,11 +138,8 @@ func newStreamIngestionDataProcessor(
 
 	if err := sip.Init(sip, post, streamIngestionResultTypes, flowCtx, processorID, output, nil, /* memMonitor */
 		execinfra.ProcStateOpts{
-			InputsToDrain: []execinfra.RowSource{},
-			TrailingMetaCallback: func(context.Context) []execinfrapb.ProducerMetadata {
-				sip.close()
-				return nil
-			},
+			InputsToDrain:        []execinfra.RowSource{},
+			TrailingMetaCallback: nil, // no resources to close
 		},
 	); err != nil {
 		return nil, err
@@ -183,7 +179,7 @@ func (sip *streamIngestionProcessor) Next() (rowenc.EncDatumRow, *execinfrapb.Pr
 		return nil, sip.DrainHelper()
 	}
 
-	// read from buffered resolved events.
+	// rRead from buffered resolved events.
 	progressUpdate, ok := <-sip.flushedCheckpoints
 	if ok && progressUpdate != nil {
 		progressBytes, err := protoutil.Marshal(progressUpdate)
@@ -208,16 +204,7 @@ func (sip *streamIngestionProcessor) Next() (rowenc.EncDatumRow, *execinfrapb.Pr
 
 // ConsumerClosed is part of the RowSource interface.
 func (sip *streamIngestionProcessor) ConsumerClosed() {
-	sip.close()
-}
-
-func (sip *streamIngestionProcessor) close() {
-	if sip.InternalClose() {
-		if sip.batcher != nil {
-			// FIXME: We should close this, but there might be a race here?
-			// sip.batcher.Close()
-		}
-	}
+	sip.InternalClose()
 }
 
 func (sip *streamIngestionProcessor) flush() error {
@@ -233,8 +220,6 @@ func (sip *streamIngestionProcessor) flush() error {
 	if err := sip.batcher.Flush(sip.Ctx); err != nil {
 		return errors.Wrap(err, "flushing")
 	}
-
-	log.Infof(sip.Ctx, "testing: flushing %d keys!", len(sip.curBatch))
 
 	// Go through buffered checkpoint events, and put them on the channel to be
 	// emitted to the downstream frontier processor.
@@ -285,10 +270,10 @@ func (sip *streamIngestionProcessor) merge(
 					select {
 					case merged <- pe:
 					case <-ctxDone:
-						return gctx.Err()
+						return errors.Wrap(gctx.Err(), "gctx err")
 					}
 				case <-ctxDone:
-					return gctx.Err()
+					return errors.Wrap(gctx.Err(), "gctx err")
 				}
 			}
 		})
@@ -302,20 +287,27 @@ func (sip *streamIngestionProcessor) merge(
 }
 
 // consumeEvents continues to consume events until it flushes a checkpoint
-// event. It may not flush every checkpoint event due to the minimum flush
-// interval.
-//
-// It returns all partitions that are flushed.
+// event. It buffers incoming events, and periodically flushes.
 func (sip *streamIngestionProcessor) consumeEvents(events chan partitionEvent) error {
+	// This timer is used to batch up resolved timestamp events that occur within
+	// a given time interval, as to not flush too often and allow the buffer to
+	// accumulate data.
+	// A flush may still occur if the in memory buffer becomes full.
 	var timer timeutil.Timer
 	defer timer.Stop()
 	sv := &sip.FlowCtx.Cfg.Settings.SV
+
+	defer func() {
+		if sip.batcher != nil {
+			sip.batcher.Close()
+		}
+	}()
 
 	for {
 		select {
 		case event, ok := <-events:
 			if !ok {
-				// Done consuming events
+				// Done consuming events, flush the remaining.
 				return sip.flush()
 			}
 

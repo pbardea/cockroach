@@ -276,7 +276,7 @@ func (m *randomStreamClient) ConsumePartition(
 		for {
 			var event streamingccl.Event
 			if numKVEventsSinceLastResolved == m.config.kvsPerCheckpoint {
-				// Emit a CheckpointEvent
+				// Emit a CheckpointEvent.
 				resolvedTime := timeutil.Now()
 				hlcResolvedTime := hlc.Timestamp{WallTime: resolvedTime.UnixNano()}
 				event = streamingccl.MakeCheckpointEvent(hlcResolvedTime)
