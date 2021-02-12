@@ -79,6 +79,7 @@ type streamIngestionProcessor struct {
 	flushedCheckpoints  chan *jobspb.ResolvedSpan
 	lastFlushTime       time.Time
 	bufferedCheckpoints map[streamingccl.PartitionAddress]hlc.Timestamp
+	events chan partitionEvent
 }
 
 // partitionEvent augments a normal event with the partition it came from.
@@ -288,7 +289,7 @@ func (sip *streamIngestionProcessor) merge(
 
 // consumeEvents continues to consume events until it flushes a checkpoint
 // event. It buffers incoming events, and periodically flushes.
-func (sip *streamIngestionProcessor) consumeEvents(events chan partitionEvent) error {
+func (sip *streamIngestionProcessor) consumeEvents() error {
 	// This timer is used to batch up resolved timestamp events that occur within
 	// a given time interval, as to not flush too often and allow the buffer to
 	// accumulate data.
@@ -305,7 +306,7 @@ func (sip *streamIngestionProcessor) consumeEvents(events chan partitionEvent) e
 
 	for {
 		select {
-		case event, ok := <-events:
+		case event, ok := sip.events<-events:
 			if !ok {
 				// Done consuming events, flush the remaining.
 				return sip.flush()

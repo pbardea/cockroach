@@ -248,7 +248,7 @@ func TestRandomClientGeneration(t *testing.T) {
 	conn := tc.Conns[0]
 	sqlDB := sqlutils.MakeSQLRunner(conn)
 
-	//sqlDB.Exec(t, `SET CLUSTER SETTING bulkio.stream_ingestion.minimum_flush_interval='1 microsecond'`)
+	sqlDB.Exec(t, `SET CLUSTER SETTING bulkio.stream_ingestion.minimum_flush_interval='1 microsecond'`)
 
 	// TODO: Consider testing variations on these parameters.
 	valueRange := 100
@@ -321,6 +321,7 @@ func TestRandomClientGeneration(t *testing.T) {
 	for _, failure := range streamValidator.GetValidator().Failures() {
 		t.Error(failure)
 	}
+	time.Sleep(100 * time.Millisecond)
 
 	for pSpan, id := range partitionSpanToTableID {
 		numRows, err := strconv.Atoi(sqlDB.QueryStr(t, fmt.Sprintf(

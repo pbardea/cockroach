@@ -42,6 +42,8 @@ func TestStreamIngestionJobRollBack(t *testing.T) {
 	registry := tc.Server(0).JobRegistry().(*jobs.Registry)
 	sqlDB := sqlutils.MakeSQLRunner(tc.ServerConn(0))
 
+	sqlDB.Exec(t, `SET CLUSTER SETTING bulkio.stream_ingestion.minimum_flush_interval = '100 milliseconds';`)
+
 	// Load some initial data in the table. We're going to rollback to this time.
 	sqlDB.Exec(t, `CREATE TABLE foo AS SELECT * FROM generate_series(0, 100);`)
 	var tableID uint32
