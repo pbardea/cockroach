@@ -6,7 +6,7 @@
 //
 //     https://github.com/cockroachdb/cockroach/blob/master/licenses/CCL.txt
 
-package backupbase
+package backupccl
 
 import (
 	"context"
@@ -24,16 +24,16 @@ import (
 type clusterBackupInclusion int
 
 const (
-	// InvalidBackupInclusion indicates that no preference for cluster backup inclusion has been
+	// invalidBackupInclusion indicates that no preference for cluster backup inclusion has been
 	// set. This is to ensure that newly added system tables have to explicitly
 	// opt-in or out of cluster backups.
-	InvalidBackupInclusion = iota
-	// OptInToClusterBackup indicates that the system table
+	invalidBackupInclusion = iota
+	// optInToClusterBackup indicates that the system table
 	// should be included in the cluster backup.
-	OptInToClusterBackup
-	// OptOutOfClusterBackup indicates that the system table
+	optInToClusterBackup
+	// optOutOfClusterBackup indicates that the system table
 	// should not be included in the cluster backup.
-	OptOutOfClusterBackup
+	optOutOfClusterBackup
 )
 
 // systemBackupConfiguration holds any configuration related to backing up
@@ -47,16 +47,16 @@ const (
 //    restore creates descriptors with the same ID as they had in the backing up
 //    cluster so there is no need to rewrite system table data.
 type systemBackupConfiguration struct {
-	IncludeInClusterBackup clusterBackupInclusion
-	// CustomRestoreFunc is responsible for restoring the data from a table that
+	includeInClusterBackup clusterBackupInclusion
+	// customRestoreFunc is responsible for restoring the data from a table that
 	// holds the restore system table data into the given system table. If none
 	// is provided then `defaultRestoreFunc` is used.
-	CustomRestoreFunc func(ctx context.Context, execCtx *sql.ExecutorConfig, txn *kv.Txn, systemTableName, tempTableName string) error
+	customRestoreFunc func(ctx context.Context, execCtx *sql.ExecutorConfig, txn *kv.Txn, systemTableName, tempTableName string) error
 }
 
 // DefaultSystemTableRestoreFunc is how system table data is restored. This can
 // be overwritten with the system table's
-// systemBackupConfiguration.CustomRestoreFunc.
+// systemBackupConfiguration.customRestoreFunc.
 func DefaultSystemTableRestoreFunc(
 	ctx context.Context,
 	execCfg *sql.ExecutorConfig,
@@ -136,112 +136,112 @@ func settingsRestoreFunc(
 	return nil
 }
 
-// SystemTableBackupConfiguration is a map from every systemTable present in the
+// systemTableBackupConfiguration is a map from every systemTable present in the
 // cluster to a configuration struct which specifies how it should be treated by
 // backup. Every system table should have a specification defined here, enforced
 // by TestAllSystemTablesHaveBackupConfig.
-var SystemTableBackupConfiguration = map[string]systemBackupConfiguration{
+var systemTableBackupConfiguration = map[string]systemBackupConfiguration{
 	systemschema.UsersTable.GetName(): {
-		IncludeInClusterBackup: OptInToClusterBackup,
+		includeInClusterBackup: optInToClusterBackup,
 	},
 	systemschema.ZonesTable.GetName(): {
-		IncludeInClusterBackup: OptInToClusterBackup,
+		includeInClusterBackup: optInToClusterBackup,
 	},
 	systemschema.SettingsTable.GetName(): {
-		IncludeInClusterBackup: OptInToClusterBackup,
-		CustomRestoreFunc:      settingsRestoreFunc,
+		includeInClusterBackup: optInToClusterBackup,
+		customRestoreFunc:      settingsRestoreFunc,
 	},
 	systemschema.LocationsTable.GetName(): {
-		IncludeInClusterBackup: OptInToClusterBackup,
+		includeInClusterBackup: optInToClusterBackup,
 	},
 	systemschema.RoleMembersTable.GetName(): {
-		IncludeInClusterBackup: OptInToClusterBackup,
+		includeInClusterBackup: optInToClusterBackup,
 	},
 	systemschema.RoleOptionsTable.GetName(): {
-		IncludeInClusterBackup: OptInToClusterBackup,
+		includeInClusterBackup: optInToClusterBackup,
 	},
 	systemschema.UITable.GetName(): {
-		IncludeInClusterBackup: OptInToClusterBackup,
+		includeInClusterBackup: optInToClusterBackup,
 	},
 	systemschema.CommentsTable.GetName(): {
-		IncludeInClusterBackup: OptInToClusterBackup,
+		includeInClusterBackup: optInToClusterBackup,
 	},
 	systemschema.JobsTable.GetName(): {
-		IncludeInClusterBackup: OptInToClusterBackup,
-		CustomRestoreFunc:      jobsRestoreFunc,
+		includeInClusterBackup: optInToClusterBackup,
+		customRestoreFunc:      jobsRestoreFunc,
 	},
 	systemschema.ScheduledJobsTable.GetName(): {
-		IncludeInClusterBackup: OptInToClusterBackup,
+		includeInClusterBackup: optInToClusterBackup,
 	},
 	systemschema.TableStatisticsTable.GetName(): {
 		// Table statistics are backed up in the backup descriptor for now.
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.DescriptorTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.EventLogTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.LeaseTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.NamespaceTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.DeprecatedNamespaceTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.ProtectedTimestampsMetaTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.ProtectedTimestampsRecordsTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.RangeEventTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.ReplicationConstraintStatsTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.ReplicationCriticalLocalitiesTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.ReportsMetaTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.ReplicationStatsTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.SqllivenessTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.StatementBundleChunksTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.StatementDiagnosticsTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.StatementDiagnosticsRequestsTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.TenantsTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.WebSessionsTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 	systemschema.MigrationsTable.GetName(): {
-		IncludeInClusterBackup: OptOutOfClusterBackup,
+		includeInClusterBackup: optOutOfClusterBackup,
 	},
 }
 
-// GetSystemTablesToIncludeInClusterBackup returns a set of system table names that
+// getSystemTablesToIncludeInClusterBackup returns a set of system table names that
 // should be included in a cluster backup.
-func GetSystemTablesToIncludeInClusterBackup() map[string]struct{} {
+func getSystemTablesToIncludeInClusterBackup() map[string]struct{} {
 	systemTablesToInclude := make(map[string]struct{})
-	for systemTableName, backupConfig := range SystemTableBackupConfiguration {
-		if backupConfig.IncludeInClusterBackup == OptInToClusterBackup {
+	for systemTableName, backupConfig := range systemTableBackupConfiguration {
+		if backupConfig.includeInClusterBackup == optInToClusterBackup {
 			systemTablesToInclude[systemTableName] = struct{}{}
 		}
 	}

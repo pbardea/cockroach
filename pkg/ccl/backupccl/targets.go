@@ -19,7 +19,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
-	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catalogkeys"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catalogkv"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
@@ -281,32 +280,6 @@ func CheckObjectExists(
 	return nil
 }
 
-func fullClusterTargetsRestore(
-	allDescs []catalog.Descriptor, lastBackupManifest BackupManifest,
-) ([]catalog.Descriptor, []catalog.DatabaseDescriptor, []descpb.TenantInfo, error) {
-	fullClusterDescs, fullClusterDBs, err := backupbase.FullClusterTargets(allDescs)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	filteredDescs := make([]catalog.Descriptor, 0, len(fullClusterDescs))
-	for _, desc := range fullClusterDescs {
-		if _, isDefaultDB := catalogkeys.DefaultUserDBs[desc.GetName()]; !isDefaultDB && desc.GetID() != keys.SystemDatabaseID {
-			filteredDescs = append(filteredDescs, desc)
-		}
-	}
-	filteredDBs := make([]catalog.DatabaseDescriptor, 0, len(fullClusterDBs))
-	for _, db := range fullClusterDBs {
-		if _, isDefaultDB := catalogkeys.DefaultUserDBs[db.GetName()]; !isDefaultDB && db.GetID() != keys.SystemDatabaseID {
-			filteredDBs = append(filteredDBs, db)
-		}
-	}
-
-	// Restore all tenants during full-cluster restore.
-	tenants := lastBackupManifest.Tenants
-
-	return filteredDescs, filteredDBs, tenants, nil
-}
-
 func selectTargets(
 	ctx context.Context,
 	p sql.PlanHookState,
@@ -315,10 +288,10 @@ func selectTargets(
 	descriptorCoverage tree.DescriptorCoverage,
 	asOf hlc.Timestamp,
 ) ([]catalog.Descriptor, []catalog.DatabaseDescriptor, []descpb.TenantInfo, error) {
-	allDescs, lastBackupManifest := loadSQLDescsFromBackupsAtTime(backupManifests, asOf)
+	backupDescs, lastBackupManifest := loadSQLDescsFromBackupsAtTime(backupManifests, asOf)
 
 	if descriptorCoverage == tree.AllDescriptors {
-		return fullClusterTargetsRestore(allDescs, lastBackupManifest)
+		return fullClusterTargetsForRestore(backupDescs, lastBackupManifest)
 	}
 
 	if targets.Tenant != (roachpb.TenantID{}) {
@@ -333,7 +306,7 @@ func selectTargets(
 	}
 
 	matched, err := backupbase.DescriptorsMatchingTargets(ctx,
-		p.CurrentDatabase(), p.CurrentSearchPath(), allDescs, targets)
+		p.CurrentDatabase(), p.CurrentSearchPath(), backupDescs, targets)
 	if err != nil {
 		return nil, nil, nil, err
 	}

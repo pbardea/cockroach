@@ -808,7 +808,17 @@ func backupPlanHook(
 			mvccFilter = MVCCFilter_All
 		}
 
-		targetDescs, completeDBs, err := backupbase.ResolveTargetsToDescriptors(ctx, p, endTime, backupStmt.Targets)
+		var targetDescs []catalog.Descriptor
+		var completeDBs []descpb.ID
+		if backupStmt.Targets == nil {
+			allDescs, err := backupbase.LoadAllDescs(ctx, p.ExecCfg().Codec, p.ExecCfg().DB, endTime)
+			if err != nil {
+				return err
+			}
+			targetDescs, completeDBs, err = fullClusterTargetsForBackup(allDescs)
+		} else {
+			targetDescs, completeDBs, err = backupbase.ResolveTargetsToDescriptors(ctx, p, endTime, backupStmt.Targets)
+		}
 		if err != nil {
 			return errors.Wrap(err, "failed to resolve targets specified in the BACKUP stmt")
 		}
