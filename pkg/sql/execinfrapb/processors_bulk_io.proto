@@ -147,6 +147,9 @@ message StreamIngestionDataSpec {
   optional util.hlc.Timestamp start_time = 2 [(gogoproto.nullable) = false];
   // StreamAddress locate the stream so that a stream client can be initialized.
   optional string stream_address = 3 [(gogoproto.customtype) = "github.com/cockroachdb/cockroach/pkg/ccl/streamingccl.StreamAddress",(gogoproto.nullable) = false];
+  // Time offset is the offset in nanoseconds that is applied to events being
+  // ingested. Timestamps of ingested keys can be offset.
+  optional int64 time_offset = 4 [(gogoproto.nullable) = false];
 }
 
 message StreamIngestionFrontierSpec {

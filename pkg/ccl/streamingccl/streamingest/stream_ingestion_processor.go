@@ -304,6 +304,9 @@ func (sip *streamIngestionProcessor) consumeEvents() (*jobspb.ResolvedSpans, err
 				return sip.flush()
 			}
 
+			// Offset all of the events that we're ingesting.
+			event.OffsetTimestamp(sip.spec.TimeOffset)
+
 			switch event.Type() {
 			case streamingccl.KVEvent:
 				if err := sip.bufferKV(event); err != nil {

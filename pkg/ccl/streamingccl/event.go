@@ -37,6 +37,10 @@ type Event interface {
 	// CheckpointEvent. The resolved timestamp indicates that all KV events until
 	// this time have been emitted.
 	GetResolved() *hlc.Timestamp
+
+	// OffsetTimestamp offset's the event's timestamp by the given number of
+	// nanoseconds.
+	OffsetTimestamp(offset int64)
 }
 
 // kvEvent is a key value pair that needs to be ingested.
@@ -44,21 +48,28 @@ type kvEvent struct {
 	kv roachpb.KeyValue
 }
 
-var _ Event = kvEvent{}
+var _ Event = &kvEvent{}
 
 // Type implements the Event interface.
-func (kve kvEvent) Type() EventType {
+func (kve *kvEvent) Type() EventType {
 	return KVEvent
 }
 
 // GetKV implements the Event interface.
-func (kve kvEvent) GetKV() *roachpb.KeyValue {
+func (kve *kvEvent) GetKV() *roachpb.KeyValue {
 	return &kve.kv
 }
 
 // GetResolved implements the Event interface.
-func (kve kvEvent) GetResolved() *hlc.Timestamp {
+func (kve *kvEvent) GetResolved() *hlc.Timestamp {
 	return nil
+}
+
+// OffsetTimestamp implements the Event interface.
+func (kve *kvEvent) OffsetTimestamp(offset int64) {
+	ts := kve.kv.Value.Timestamp
+	ts.WallTime += offset
+	kve.kv.Value.Timestamp = ts
 }
 
 // checkpointEvent indicates that the stream has emitted every change for all
@@ -67,29 +78,36 @@ type checkpointEvent struct {
 	resolvedTimestamp hlc.Timestamp
 }
 
-var _ Event = checkpointEvent{}
+var _ Event = &checkpointEvent{}
 
 // Type implements the Event interface.
-func (ce checkpointEvent) Type() EventType {
+func (ce *checkpointEvent) Type() EventType {
 	return CheckpointEvent
 }
 
 // GetKV implements the Event interface.
-func (ce checkpointEvent) GetKV() *roachpb.KeyValue {
+func (ce *checkpointEvent) GetKV() *roachpb.KeyValue {
 	return nil
 }
 
 // GetResolved implements the Event interface.
-func (ce checkpointEvent) GetResolved() *hlc.Timestamp {
+func (ce *checkpointEvent) GetResolved() *hlc.Timestamp {
 	return &ce.resolvedTimestamp
+}
+
+// OffsetTimestamp implements the Event interface.
+func (ce *checkpointEvent) OffsetTimestamp(offset int64) {
+	ts := ce.resolvedTimestamp
+	ts.WallTime += offset
+	ce.resolvedTimestamp = ts
 }
 
 // MakeKVEvent creates an Event from a KV.
 func MakeKVEvent(kv roachpb.KeyValue) Event {
-	return kvEvent{kv: kv}
+	return &kvEvent{kv: kv}
 }
 
 // MakeCheckpointEvent creates an Event from a resolved timestamp.
 func MakeCheckpointEvent(resolvedTimestamp hlc.Timestamp) Event {
-	return checkpointEvent{resolvedTimestamp: resolvedTimestamp}
+	return &checkpointEvent{resolvedTimestamp: resolvedTimestamp}
 }

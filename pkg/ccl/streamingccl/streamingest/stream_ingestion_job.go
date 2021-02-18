@@ -81,6 +81,7 @@ func (s *streamIngestionResumer) Resume(ctx context.Context, execCtx interface{}
 	details := s.job.Details().(jobspb.StreamIngestionDetails)
 	p := execCtx.(sql.JobExecContext)
 
+	// Then we ingest the data after some start-time.
 	err := ingest(ctx, p, details.StreamAddress, s.job.Progress(),
 		*s.job.ID())
 	if err != nil {

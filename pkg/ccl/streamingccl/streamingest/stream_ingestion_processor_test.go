@@ -42,6 +42,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	noTimeOffset = 0
+)
+
 // mockStreamClient will return the slice of events associated to the stream
 // partition being consumed. Stream partitions are identified by unique
 // partition addresses.
@@ -65,7 +69,7 @@ func (m *mockStreamClient) ConsumePartition(
 	var events []streamingccl.Event
 	var ok bool
 	if events, ok = m.partitionEvents[address]; !ok {
-		return nil, errors.Newf("no events found for paritition %s", address)
+		return nil, errors.Newf("no events found for partition %s", address)
 	}
 
 	eventCh := make(chan streamingccl.Event, len(events))
@@ -111,24 +115,30 @@ func TestStreamIngestionProcessor(t *testing.T) {
 		v := roachpb.MakeValueFromString("value_1")
 		v.Timestamp = hlc.Timestamp{WallTime: 1}
 		sampleKV := roachpb.KeyValue{Key: roachpb.Key("key_1"), Value: v}
-		events := []streamingccl.Event{
-			streamingccl.MakeKVEvent(sampleKV),
-			streamingccl.MakeKVEvent(sampleKV),
-			streamingccl.MakeCheckpointEvent(hlc.Timestamp{WallTime: 1}),
-			streamingccl.MakeKVEvent(sampleKV),
-			streamingccl.MakeKVEvent(sampleKV),
-			streamingccl.MakeCheckpointEvent(hlc.Timestamp{WallTime: 4}),
+		testEvents := func() []streamingccl.Event {
+			return []streamingccl.Event{
+				streamingccl.MakeKVEvent(sampleKV),
+				streamingccl.MakeKVEvent(sampleKV),
+				streamingccl.MakeCheckpointEvent(hlc.Timestamp{WallTime: 1}),
+				streamingccl.MakeKVEvent(sampleKV),
+				streamingccl.MakeKVEvent(sampleKV),
+				streamingccl.MakeCheckpointEvent(hlc.Timestamp{WallTime: 4}),
+			}
 		}
 		pa1 := streamingccl.PartitionAddress("partition1")
 		pa2 := streamingccl.PartitionAddress("partition2")
 		mockClient := &mockStreamClient{
-			partitionEvents: map[streamingccl.PartitionAddress][]streamingccl.Event{pa1: events, pa2: events},
+			partitionEvents: map[streamingccl.PartitionAddress][]streamingccl.Event{
+				pa1: testEvents(),
+				pa2: testEvents(),
+			},
 		}
 
+		timeOffset := int64(10)
 		startTime := hlc.Timestamp{WallTime: timeutil.Now().UnixNano()}
 		partitionAddresses := []streamingccl.PartitionAddress{"partition1", "partition2"}
 		out, err := runStreamIngestionProcessor(ctx, t, kvDB, "some://stream", partitionAddresses,
-			startTime, nil /* interceptEvents */, mockClient)
+			startTime, timeOffset, nil /* interceptEvents */, mockClient)
 		require.NoError(t, err)
 
 		actualRows := make(map[string]struct{})
@@ -151,17 +161,20 @@ func TestStreamIngestionProcessor(t *testing.T) {
 		// Only compare the latest advancement, since not all intermediary resolved
 		// timestamps might be flushed (due to the minimum flush interval setting in
 		// the ingestion processor).
-		require.Contains(t, actualRows, "partition1{-\\x00} 0.000000004,0",
-			"partition 1 should advance to timestamp 4")
-		require.Contains(t, actualRows, "partition2{-\\x00} 0.000000004,0",
-			"partition 2 should advance to timestamp 4")
+		//
+		// We expect the timestamps to take into account the offset specified in the
+		// processor.
+		require.Contains(t, actualRows, "partition1{-\\x00} 0.000000014,0",
+			"partition 1 should advance to timestamp 14")
+		require.Contains(t, actualRows, "partition2{-\\x00} 0.000000014,0",
+			"partition 2 should advance to timestamp 14")
 	})
 
 	t.Run("error stream client", func(t *testing.T) {
 		startTime := hlc.Timestamp{WallTime: timeutil.Now().UnixNano()}
 		partitionAddresses := []streamingccl.PartitionAddress{"partition1", "partition2"}
 		out, err := runStreamIngestionProcessor(ctx, t, kvDB, "some://stream", partitionAddresses,
-			startTime, nil /* interceptEvents */, &errorStreamClient{})
+			startTime, noTimeOffset, nil /* interceptEvents */, &errorStreamClient{})
 		require.NoError(t, err)
 
 		// Expect no rows, and just the error.
@@ -304,9 +317,12 @@ func TestRandomClientGeneration(t *testing.T) {
 	cancelAfterCheckpoints := makeCheckpointEventCounter(1000, cancel)
 	streamValidator := cdctest.NewStreamClientValidatorWrapper()
 	validator := registerValidator(streamValidator.GetValidator())
+	interceptors := []func(streamingccl.Event, streamingccl.PartitionAddress){
+		cancelAfterCheckpoints,
+		validator,
+	}
 	out, err := runStreamIngestionProcessor(ctx, t, kvDB, streamAddr, topo.Partitions,
-		startTime, []func(streamingccl.Event, streamingccl.PartitionAddress){cancelAfterCheckpoints,
-			validator}, nil /* mockClient */)
+		startTime, noTimeOffset, interceptors, nil /* mockClient */)
 	require.NoError(t, err)
 
 	partitionSpanToTableID := getPartitionSpanToTableID(t, topo.Partitions)
@@ -375,6 +391,7 @@ func runStreamIngestionProcessor(
 	streamAddr string,
 	partitionAddresses []streamingccl.PartitionAddress,
 	startTime hlc.Timestamp,
+	timeOffset int64,
 	interceptEvents []func(streamingccl.Event, streamingccl.PartitionAddress),
 	mockClient streamclient.Client,
 ) (*distsqlutils.RowBuffer, error) {
@@ -400,9 +417,10 @@ func runStreamIngestionProcessor(
 
 	var spec execinfrapb.StreamIngestionDataSpec
 	spec.StreamAddress = streamingccl.StreamAddress(streamAddr)
-
 	spec.PartitionAddresses = partitionAddresses
 	spec.StartTime = startTime
+	spec.TimeOffset = timeOffset
+
 	processorID := int32(0)
 	proc, err := newStreamIngestionDataProcessor(&flowCtx, processorID, spec, &post, out)
 	require.NoError(t, err)
