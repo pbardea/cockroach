@@ -13,11 +13,25 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/cockroachdb/cockroach/pkg/ccl/utilccl"
 	"github.com/cockroachdb/errors"
 )
 
 const retryableErrorString = "retryable changefeed error"
 
+// This package offers tooling for marking and detecting errors that are
+// retryable in the context of changefeeds. These retryable errors should be
+// more generically utilccl.retryableJobsFlowErrors since any job that spins up
+// a flow may want to retry errors in a similar way.
+//
+// In order to keep compatibility with older nodes that emit CDC-specific errors
+// 21.1 needs to mark these errors with both the generic
+// utilccl.retryableJobsFlowError (for compatibility with future 21.2 nodes) and this
+// changefeedccl.retryableError (for compatibility with 20.2 nodes).
+//
+// This error should only be used to detect errors sent by 20.2 nodes, and should be
+// removed in 21.2. Until then, it is duplicative of the logic in utilccl/errors.go.
+// TODO(pbardea): Remove in 21.2.
 type retryableError struct {
 	wrapped error
 }
@@ -25,6 +39,8 @@ type retryableError struct {
 // MarkRetryableError wraps the given error, marking it as retryable to
 // changefeeds.
 func MarkRetryableError(e error) error {
+	// Also wrap the error with a generic jobs retryable error.
+	e = utilccl.MarkRetryableError(e)
 	return &retryableError{wrapped: e}
 }
 
@@ -40,9 +56,9 @@ func (e *retryableError) Cause() error { return e.wrapped }
 // planned to be moved to the stdlib in go 1.13.
 func (e *retryableError) Unwrap() error { return e.wrapped }
 
-// IsRetryableError returns true if the supplied error, or any of its parent
-// causes, is a IsRetryableError.
-func IsRetryableError(err error) bool {
+// isRetryableError returns true if the supplied error, or any of its parent
+// causes, is a isRetryableError.
+func isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -60,19 +76,14 @@ func IsRetryableError(err error) bool {
 		// unfortunate string comparison.
 		return true
 	}
-	if strings.Contains(errStr, `rpc error`) {
-		// When a crdb node dies, any DistSQL flows with processors scheduled on
-		// it get an error with "rpc error" in the message from the call to
-		// `(*DistSQLPlanner).Run`.
-		return true
-	}
-	return false
+
+	return utilccl.IsDistSQLRetryableError(err)
 }
 
-// MaybeStripRetryableErrorMarker performs some minimal attempt to clean the
+// maybeStripRetryableErrorMarker performs some minimal attempt to clean the
 // RetryableError marker out. This won't do anything if the RetryableError
 // itself has been wrapped, but that's okay, we'll just have an uglier string.
-func MaybeStripRetryableErrorMarker(err error) error {
+func maybeStripRetryableErrorMarker(err error) error {
 	// The following is a hack to work around the error cast linter.
 	// What we're doing here is really not kosher; this function
 	// has no business in assuming that the retryableError{} wrapper
@@ -82,7 +93,8 @@ func MaybeStripRetryableErrorMarker(err error) error {
 	if reflect.TypeOf(err) == retryableErrorType {
 		err = errors.UnwrapOnce(err)
 	}
-	return err
+
+	return utilccl.MaybeStripRetryableErrorMarker(err)
 }
 
 var retryableErrorType = reflect.TypeOf((*retryableError)(nil))
