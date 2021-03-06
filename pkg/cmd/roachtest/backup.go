@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/storage/cloudimpl"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/util/version"
@@ -97,152 +96,51 @@ func registerBackup(r *testRegistry) {
 		},
 	})
 
-	// backupNodeRestartSpec runs a backup and randomly shuts down a node
-	// during the backup.
+	// backupNodeRestartSpec runs a backup and randomly shuts down a node during
+	// the backup.
 	backupNodeRestartSpec := makeClusterSpec(4)
 	r.Add(testSpec{
-		Name:       fmt.Sprintf("backup/nodeShutdown/%s", backupNodeRestartSpec),
+		Name:       fmt.Sprintf("backup/nodeShutdown/coordinator/%s", backupNodeRestartSpec),
 		Owner:      OwnerBulkIO,
 		Cluster:    backupNodeRestartSpec,
 		MinVersion: "v21.1.0",
 		Run: func(ctx context.Context, t *test, c *cluster) {
-			// ~100 GiB aught to be enough since this isn't a
-			// performance test.
+			// ~100 GiB aught to be enough since this isn't a performance test.
 			rows := rows100GiB
 			if local {
-				// Needs to be sufficiently large to give each
-				// processor a good chunk of works so the job
-				// doesn't complete immediately.
-				// Even with this size, there is still a chance
-				// this test will return false-positives when
-				// run locally.
-				rows = rows3GiB
+				// Needs to be sufficiently large to give each processor a good chunk of
+				// works so the job doesn't complete immediately.
+				rows = rows30GiB
 			}
+			dest := importBankData(ctx, rows, t, c)
+			query := `BACKUP bank.bank TO 'nodelocal://1/` + dest + `' WITH DETACHED`
 
-			ranges := 100
-			dest := importBankDataSplit(ctx, rows, ranges, t, c)
-			// The backup job is run on the gateway, so this node will be the
-			// coordinator initially.
 			gatewayNode := 2
-			// Select 2 nodes, a target that will be shutdown, and a watcher that can
-			// check the status of the job.
+			nodeToShutdown := 3
 
-			// TODO(pbardea): The watcher's connection when querying the job
-			// status mysteriously hangs when targetting node 1.
-			targetNode := 3 // 1 + rand.Intn(c.spec.NodeCount)
-			watcherNode := 1 + (targetNode)%c.spec.NodeCount
-			target := c.Node(targetNode)
-			t.l.Printf("test has chosen gateway node %d, shutdown target node %d, and watcher node %d",
-				gatewayNode, targetNode, watcherNode)
-
-			jobIDCh := make(chan string, 1)
-
-			m := newMonitor(ctx, c)
-			m.Go(func(ctx context.Context) error {
-				t.Status(`running backup`)
-				query := `BACKUP bank.bank TO 'nodelocal://1/` + dest + `' WITH DETACHED`
-
-				gatewayDB := c.Conn(ctx, gatewayNode)
-				defer gatewayDB.Close()
-
-				var jobID string
-				if err := gatewayDB.QueryRowContext(ctx, query).Scan(&jobID); err != nil {
-					return errors.Wrap(err, "running backup statement")
-				}
-				t.l.Printf("started running backup job with ID %s on node %d", jobID, gatewayNode)
-				jobIDCh <- jobID
-				close(jobIDCh)
-
-				pollInterval := 30 * time.Second
-				if local {
-					pollInterval = 5 * time.Second
-				}
-				ticker := time.NewTicker(pollInterval)
-
-				watcherDB := c.Conn(ctx, watcherNode)
-				defer watcherDB.Close()
-
-				var status string
-				for {
-					select {
-					case <-ticker.C:
-						err := watcherDB.QueryRowContext(ctx, `SELECT status FROM [SHOW JOBS] WHERE job_id=$1`, jobID).Scan(&status)
-						if err != nil {
-							return errors.Wrap(err, "getting the job status")
-						}
-						jobStatus := jobs.Status(status)
-						switch jobStatus {
-						case jobs.StatusSucceeded:
-							t.Status("backup job completed")
-							return nil
-						case jobs.StatusRunning:
-							t.l.Printf("backup job %s still running, waiting to succeed", jobID)
-						default:
-							// Waiting for job to complete.
-							return errors.Newf("unexpectedly found backup job %s in state %s", jobID, status)
-						}
-					case <-ctx.Done():
-						return errors.Wrap(ctx.Err(), "context cancelled while waiting for job to finish")
-					}
-				}
-			})
-
-			m.Go(func(ctx context.Context) error {
-				jobID := <-jobIDCh
-
-				t.l.Printf(`shutting down node %s`, target)
-
-				// Shutdown a node after a bit, and keep it shutdown for the remainder
-				// of the backup.
-				timeToWait := 20 * time.Second
-				if local {
-					timeToWait = 8 * time.Second
-				}
-				timer := timeutil.Timer{}
-				timer.Reset(timeToWait)
-				select {
-				case <-ctx.Done():
-					return errors.Wrapf(ctx.Err(), "stopping test, did not shutdown node")
-				case <-timer.C:
-					timer.Read = true
-				}
-
-				// Sanity check that the job is still running.
-				watcherDB := c.Conn(ctx, watcherNode)
-				defer watcherDB.Close()
-
-				var status string
-				err := watcherDB.QueryRowContext(ctx, `SELECT status FROM [SHOW JOBS] WHERE job_id=$1`, jobID).Scan(&status)
-				if err != nil {
-					return errors.Wrap(err, "getting the job status")
-				}
-				jobStatus := jobs.Status(status)
-				if jobStatus != jobs.StatusRunning {
-					return errors.Newf("job too fast! job got to state %s before the target node could be shutdown",
-						status)
-				}
-
-				if err := c.StopE(ctx, target); err != nil {
-					return errors.Wrapf(err, "could not stop node %s", target)
-				}
-				t.l.Printf("stopped node %s", target)
-
-				return nil
-			})
-
-			// Before calling `m.Wait()`, do some cleanup.
-			if err := m.g.Wait(); err != nil {
-				t.Fatal(err)
+			jobSurvivesNodeShutdown(ctx, t, c, gatewayNode, nodeToShutdown, query)
+		},
+	})
+	r.Add(testSpec{
+		Name:       fmt.Sprintf("backup/nodeShutdown/worker/%s", backupNodeRestartSpec),
+		Owner:      OwnerBulkIO,
+		Cluster:    backupNodeRestartSpec,
+		MinVersion: "v21.1.0",
+		Run: func(ctx context.Context, t *test, c *cluster) {
+			// ~100 GiB aught to be enough since this isn't a performance test.
+			rows := rows100GiB
+			if local {
+				// Needs to be sufficiently large to give each processor a good chunk of
+				// works so the job doesn't complete immediately.
+				rows = rows30GiB
 			}
+			dest := importBankData(ctx, rows, t, c)
+			query := `BACKUP bank.bank TO 'nodelocal://1/` + dest + `' WITH DETACHED`
 
-			// NB: the roachtest harness checks that at the end of the test, all nodes
-			// that have data also have a running process.
-			t.Status(fmt.Sprintf("restarting %s (node restart test is done)\n", target))
-			if err := c.StartE(ctx, target); err != nil {
-				t.Fatal(errors.Wrapf(err, "could not restart node %s", target))
-			}
+			gatewayNode := 2
+			nodeToShutdown := 2
 
-			m.Wait()
+			jobSurvivesNodeShutdown(ctx, t, c, gatewayNode, nodeToShutdown, query)
 		},
 	})
 
