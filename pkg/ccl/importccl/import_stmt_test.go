@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -6911,4 +6912,30 @@ func TestDetachedImport(t *testing.T) {
 	waitForJobResult(t, tc, jobID, jobs.StatusSucceeded)
 	sqlDB.QueryRow(t, importIntoQueryDetached, simpleOcf).Scan(&jobID)
 	waitForJobResult(t, tc, jobID, jobs.StatusFailed)
+}
+
+func TestImportTPCE(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	const nodes = 3
+	ctx := context.Background()
+	// baseDir := filepath.Join("testdata", "avro")
+	// args := base.TestServerArgs{ExternalIODir: baseDir}
+	tc := testcluster.StartTestCluster(t, nodes, base.TestClusterArgs{})
+	defer tc.Stopper().Stop(ctx)
+
+	connDB := tc.Conns[0]
+	sqlDB := sqlutils.MakeSQLRunner(connDB)
+
+	sqlDB.Exec(t, schemaStmt)
+	var wg sync.WaitGroup
+	for _, statement := range importStmts {
+		func(stmt string) {
+			wg.Add(1)
+			defer wg.Done()
+			sqlDB.Exec(t, stmt)
+		}(statement)
+	}
+	wg.Wait()
 }
