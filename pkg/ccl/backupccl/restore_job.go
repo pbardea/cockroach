@@ -589,7 +589,8 @@ func restore(
 		return progressLogger.Loop(ctx, requestFinishedCh)
 	})
 
-	progCh := make(chan *execinfrapb.RemoteProducerMetadata_BulkProcessorProgress)
+	// FIXME: This should not be 10.
+	progCh := make(chan *execinfrapb.RemoteProducerMetadata_BulkProcessorProgress, 10)
 
 	g.GoCtx(func(ctx context.Context) error {
 		// When a processor is done importing a span, it will send a progress update
