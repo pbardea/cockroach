@@ -47,6 +47,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2/google"
+	"golang.org/x/sync/errgroup"
 )
 
 var econnrefused = &net.OpError{Err: &os.SyscallError{
@@ -306,6 +307,36 @@ func testExportStoreWithExternalIOConfig(
 		if err := singleFile.WriteFile(ctx, "", bytes.NewReader([]byte("bbb"))); err != nil {
 			t.Fatal(err)
 		}
+
+		res, err := s.ReadFile(ctx, testingFilename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Close()
+		content, err := ioutil.ReadAll(res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Verify the result contains what we wrote.
+		if !bytes.Equal(content, []byte("bbb")) {
+			t.Fatalf("wrong content")
+		}
+
+		require.NoError(t, s.Delete(ctx, testingFilename))
+	})
+	t.Run("concurrent-write-file", func(t *testing.T) {
+		const testingFilename = "C"
+		singleFile := storeFromURI(ctx, t, appendPath(t, storeURI, testingFilename), clientFactory,
+			user, ie, kvDB)
+		defer singleFile.Close()
+
+		var g errgroup.Group
+		for i := 0; i < 8; i++ {
+			g.Go(func() error {
+				return singleFile.WriteFile(ctx, "", bytes.NewReader([]byte("bbb")))
+			})
+		}
+		require.NoError(t, g.Wait())
 
 		res, err := s.ReadFile(ctx, testingFilename)
 		if err != nil {
