@@ -467,7 +467,6 @@ func (sip *streamIngestionProcessor) bufferKV(event partitionEvent) error {
 }
 
 func (sip *streamIngestionProcessor) bufferCheckpoint(event partitionEvent) error {
-	log.Infof(sip.Ctx, "got checkpoint %v", event.GetResolved())
 	resolvedTimePtr := event.GetResolved()
 	if resolvedTimePtr == nil {
 		return errors.New("checkpoint event expected to have a resolved timestamp")
@@ -496,6 +495,7 @@ func (sip *streamIngestionProcessor) flush() (*jobspb.ResolvedSpans, error) {
 		return nil, errors.Wrap(err, "flushing")
 	}
 
+	log.Infof(context.TODO(), "flushing")
 	// Go through buffered checkpoint events, and put them on the channel to be
 	// emitted to the downstream frontier processor.
 	for partition, timestamp := range sip.bufferedCheckpoints {
@@ -508,6 +508,10 @@ func (sip *streamIngestionProcessor) flush() (*jobspb.ResolvedSpans, error) {
 		}
 		flushedCheckpoints.ResolvedSpans = append(flushedCheckpoints.ResolvedSpans, resolvedSpan)
 	}
+	for i := 0; i < 20 && i < len(sip.curBatch); i++ {
+		log.Infof(context.TODO(), "%v", sip.curBatch[i])
+	}
+	log.Infof(context.TODO(), "flushed batch of size %d", len(sip.curBatch))
 
 	// Reset the current batch.
 	sip.curBatch = nil

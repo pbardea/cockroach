@@ -30,7 +30,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/storage"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/distsqlutils"
-	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/testcluster"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
@@ -274,8 +273,9 @@ func makeTestStreamURI(
 // stream workload.
 func TestRandomClientGeneration(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	skip.WithIssue(t, 61287, "flaky test")
 	defer log.Scope(t).Close(t)
+
+	// skip.WithIssue(t, 61287, "flaky test")
 
 	ctx := context.Background()
 
@@ -286,7 +286,6 @@ func TestRandomClientGeneration(t *testing.T) {
 	conn := tc.Conns[0]
 	sqlDB := sqlutils.MakeSQLRunner(conn)
 
-	// TODO: Consider testing variations on these parameters.
 	streamAddr := getTestRandomClientURI(int(roachpb.SystemTenantID.ToUint64()))
 
 	// The random client returns system and table data partitions.
@@ -301,6 +300,9 @@ func TestRandomClientGeneration(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(ctx)
 	// Cancel the flow after emitting 1000 checkpoint events from the client.
+	// FIXME: This issue is that one partition is triggering the cutover, but we
+	// need to wait for the first batch of both partitions to be consumed.
+	// TODO: This needs to use a result writer and wait for some results.
 	mu := syncutil.Mutex{}
 	cancelAfterCheckpoints := makeCheckpointEventCounter(&mu, 1000, cancel)
 	streamValidator := newStreamClientValidator()
@@ -358,14 +360,14 @@ func TestRandomClientGeneration(t *testing.T) {
 		numRows, err := strconv.Atoi(sqlDB.QueryStr(t, fmt.Sprintf(
 			`SELECT count(*) FROM defaultdb.%s%d`, streamclient.IngestionTablePrefix, id))[0][0])
 		require.NoError(t, err)
-		require.Greater(t, numRows, 0, "at least 1 row ingested expected")
+		require.Greater(t, numRows, 0, "expected to ingest at least 1 row")
 
 		// Scan the store for KVs ingested by this partition, and compare the MVCC
 		// KVs against the KVEvents streamed up to the max ingested timestamp for
 		// the partition.
 		assertEqualKVs(t, tc, streamValidator, id, maxResolvedTimestampPerPartition[pSpan])
 	}
-	require.Greater(t, numResolvedEvents, 0, "at least 1 resolved event expected")
+	require.Greater(t, numResolvedEvents, 0, "expected at least 1 resolved event")
 }
 
 func runStreamIngestionProcessor(
@@ -395,7 +397,9 @@ func runStreamIngestionProcessor(
 		DiskMonitor: testDiskMonitor,
 	}
 
-	out := &distsqlutils.RowBuffer{}
+	out := makeCallbackRowResultWriter(ctx, func(ctx context.Context, row tree.Datums) error {
+
+	})
 	post := execinfrapb.PostProcessSpec{}
 
 	var spec execinfrapb.StreamIngestionDataSpec
@@ -411,7 +415,7 @@ func runStreamIngestionProcessor(
 	require.NoError(t, err)
 	sip, ok := proc.(*streamIngestionProcessor)
 	if !ok {
-		t.Fatal("expected the processor that's created to be a split and scatter processor")
+		t.Fatal("expected the processor that's created to be a stream ingestion processor")
 	}
 
 	if mockClient != nil {
@@ -461,18 +465,51 @@ func registerValidatorWithClient(
 func makeCheckpointEventCounter(
 	mu *syncutil.Mutex, threshold int, f func(),
 ) func(streamingccl.Event, streamingccl.PartitionAddress) {
-	mu.Lock()
-	defer mu.Unlock()
-	numCheckpointEventsGenerated := 0
-	return func(event streamingccl.Event, _ streamingccl.PartitionAddress) {
+	numCheckpointEventsGenerated := make(map[streamingccl.PartitionAddress]int)
+	return func(event streamingccl.Event, pa streamingccl.PartitionAddress) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch event.Type() {
 		case streamingccl.CheckpointEvent:
-			numCheckpointEventsGenerated++
-			if numCheckpointEventsGenerated == threshold {
+			if oldCount, ok := numCheckpointEventsGenerated[pa]; ok {
+				numCheckpointEventsGenerated[pa] = oldCount + 1
+			} else {
+				numCheckpointEventsGenerated[pa] = 1
+			}
+			allReached := true
+			for _, count := range numCheckpointEventsGenerated {
+				if count < threshold {
+					allReached = false
+				}
+			}
+			if allReached {
 				f()
 			}
 		}
 	}
+}
+
+type callbackRowResultWriter struct {
+	err          error
+	rowsAffected int
+	fn           func(context.Context, tree.Datums) error
+}
+
+func makeCallbackRowResultWriter(fn func(ctx context.Context, row tree.Datums) error) *callbackRowResultWriter {
+	return &callbackRowResultWriter{fn: fn}
+}
+
+func (w *callbackRowResultWriter) SetError(err error) {
+	w.err = err
+}
+func (w *callbackRowResultWriter) Err() error {
+	return w.err
+}
+
+func (w *callbackRowResultWriter) AddRow(ctx context.Context, row tree.Datums) error {
+	return w.fn(ctx, row)
+}
+
+func (w *callbackRowResultWriter) IncrementRowsAffected(n int) {
+	w.rowsAffected++
 }
