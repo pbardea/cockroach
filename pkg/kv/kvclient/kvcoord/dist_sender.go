@@ -2004,18 +2004,22 @@ func (ds *DistSender) sendToReplicas(
 				// via the NotLeaseHolderError or nil error paths, both of which update the
 				// leaseholder in the range cache.
 			case *roachpb.NotLeaseHolderError:
+				log.Infof(ctx, "pbardea: got a leaseholder error")
 				ds.metrics.NotLeaseHolderErrCount.Inc(1)
 				// If we got some lease information, we use it. If not, we loop around
 				// and try the next replica.
 				if tErr.Lease != nil || tErr.LeaseHolder != nil {
+					log.Infof(ctx, "pbardea: got some info")
 					// Update the leaseholder in the range cache. Naively this would also
 					// happen when the next RPC comes back, but we don't want to wait out
 					// the additional RPC latency.
 
 					var updatedLeaseholder bool
 					if tErr.Lease != nil {
+						log.Infof(ctx, "pbardea: got a lead on a new lease %v", tErr.Lease)
 						updatedLeaseholder = routing.UpdateLease(ctx, tErr.Lease)
 					} else if tErr.LeaseHolder != nil {
+						log.Infof(ctx, "pbardea: got a lead on a new leaseholder %v", tErr.LeaseHolder)
 						// tErr.LeaseHolder might be set when tErr.Lease isn't.
 						routing.UpdateLeaseholder(ctx, *tErr.LeaseHolder)
 						updatedLeaseholder = true
@@ -2024,6 +2028,7 @@ func (ds *DistSender) sendToReplicas(
 					// retry. Note that the leaseholder might not be the one indicated by
 					// the NLHE we just received, in case that error carried stale info.
 					if lh := routing.Leaseholder(); lh != nil {
+						log.Infof(ctx, "pbardea: routing seems to know something %v", lh)
 						// If the leaseholder is the replica that we've just tried, and
 						// we've tried this replica a bunch of times already, let's move on
 						// and not try it again. This prevents us getting stuck on a replica
@@ -2032,6 +2037,7 @@ func (ds *DistSender) sendToReplicas(
 						// lease expires and someone else gets a new one, so by moving on we
 						// get out of possibly infinite loops.
 						if *lh != curReplica || sameReplicaRetries < sameReplicaRetryLimit {
+							log.Infof(ctx, "pbardea: moving %v to the front", lh)
 							transport.MoveToFront(*lh)
 						}
 					}
@@ -2052,8 +2058,10 @@ func (ds *DistSender) sendToReplicas(
 						ds.metrics.InLeaseTransferBackoffs.Inc(1)
 						log.VErrEventf(ctx, 2, "backing off due to NotLeaseHolderErr with stale info")
 					} else {
+						log.Infof(ctx, "pbardea: trying next")
 						inTransferRetry.Reset() // The following Next() call will not block.
 					}
+					log.Infof(ctx, "pbardea: trying next 2")
 					inTransferRetry.Next()
 				}
 			default:

@@ -178,6 +178,36 @@ func inputReader(
 	}
 }
 
+func (rd *restoreDataProcessor) inputDownloader(entries chan execinfrapb.RestoreSpanEntry) error {
+	numWorkers := numWorkersSetting.Get(&rd.flowCtx.EvalCtx.Settings.SV)
+
+	return ctxgroup.GroupWorkers(rd.Ctx, int(numWorkers), func(ctx context.Context, n int) error {
+		for entry := range entries {
+			newSpanKey, err := rewriteBackupSpanKey(rd.flowCtx.Codec(), rd.kr, entry.Span.Key)
+			if err != nil {
+				return errors.Wrap(err, "re-writing span key to import")
+			}
+
+			summary, err := rd.processRestoreSpanEntry(entry, newSpanKey)
+			if err != nil {
+				return err
+			}
+
+			progDetails := RestoreProgress{}
+			progDetails.Summary = countRows(summary, rd.spec.PKIDs)
+			progDetails.ProgressIdx = entry.ProgressIdx
+			progDetails.DataSpan = entry.Span
+			select {
+			case rd.progCh <- progDetails:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+
+		return nil
+	})
+}
+
 func (rd *restoreDataProcessor) runRestoreWorkers(entries chan execinfrapb.RestoreSpanEntry) error {
 	numWorkers := numWorkersSetting.Get(&rd.flowCtx.EvalCtx.Settings.SV)
 
