@@ -583,6 +583,7 @@ func (db *DB) AdminSplit(
 	ctx context.Context, splitKey interface{}, expirationTime hlc.Timestamp,
 ) error {
 	b := &Batch{}
+	log.Infof(ctx, "pbardea: admin split on %+v", splitKey)
 	b.adminSplit(splitKey, expirationTime)
 	return getOneErr(db.Run(ctx, b), b)
 }

@@ -2005,6 +2005,9 @@ func (ds *DistSender) sendToReplicas(
 				// leaseholder in the range cache.
 			case *roachpb.NotLeaseHolderError:
 				log.Infof(ctx, "pbardea: got a leaseholder error")
+				for _, thing := range ba.Requests {
+					log.Infof(ctx, "pbardea: %T with header %+v", thing.GetInner(), thing.GetInner().Header())
+				}
 				ds.metrics.NotLeaseHolderErrCount.Inc(1)
 				// If we got some lease information, we use it. If not, we loop around
 				// and try the next replica.

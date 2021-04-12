@@ -3138,6 +3138,7 @@ func intersectTargets(
 func (r *Replica) adminScatter(
 	ctx context.Context, args roachpb.AdminScatterRequest,
 ) (roachpb.AdminScatterResponse, error) {
+	log.Infof(ctx, "pbardea: scattering %+v, randomized: %t", r.startKey, args.RandomizeLeases)
 	rq := r.store.replicateQueue
 	retryOpts := retry.Options{
 		InitialBackoff: 50 * time.Millisecond,
