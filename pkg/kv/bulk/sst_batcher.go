@@ -57,6 +57,9 @@ type SSTBatcher struct {
 	maxSize    func() int64
 	splitAfter func() int64
 
+	creationTime   time.Time
+	startFlushTime time.Time
+
 	// allows ingestion of keys where the MVCC.Key would shadow an existing row.
 	disallowShadowing bool
 	// skips duplicate keys (iff they are buffered together). This is true when
@@ -112,7 +115,7 @@ type SSTBatcher struct {
 func MakeSSTBatcher(
 	ctx context.Context, db SSTSender, settings *cluster.Settings, flushBytes func() int64,
 ) (*SSTBatcher, error) {
-	b := &SSTBatcher{db: db, settings: settings, maxSize: flushBytes, disallowShadowing: true}
+	b := &SSTBatcher{db: db, settings: settings, maxSize: flushBytes, disallowShadowing: true, creationTime: timeutil.Now()}
 	err := b.Reset(ctx)
 	return b, err
 }
@@ -251,10 +254,16 @@ func (b *SSTBatcher) flushIfNeeded(ctx context.Context, nextKey roachpb.Key) err
 
 // Flush sends the current batch, if any.
 func (b *SSTBatcher) Flush(ctx context.Context) error {
+	log.Infof(ctx, "debug_string_time starting flush: %+v since batcher created", timeutil.Since(b.creationTime))
+	b.startFlushTime = timeutil.Now()
+	defer func() {
+		log.Infof(ctx, "debug_string_time done flushing: %+v since flush began", timeutil.Since(b.startFlushTime))
+	}()
 	return b.doFlush(ctx, manualFlush, nil)
 }
 
 func (b *SSTBatcher) doFlush(ctx context.Context, reason int, nextKey roachpb.Key) error {
+	log.Infof(ctx, "debug_string_time doing flush with data size %+v", b.sstWriter.DataSize)
 	if b.sstWriter.DataSize == 0 {
 		return nil
 	}
