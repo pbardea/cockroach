@@ -39,6 +39,9 @@ type restoreDataProcessor struct {
 	input   execinfra.RowSource
 	output  execinfra.RowReceiver
 
+	batcher  *bulk.SSTBatcher
+	rowCount storage.RowCounter
+
 	alloc rowenc.DatumAlloc
 	kr    *storageccl.KeyRewriter
 }
@@ -72,6 +75,10 @@ func newRestoreDataProcessor(
 	if err := rd.Init(rd, post, restoreDataOutputTypes, flowCtx, processorID, output, nil, /* memMonitor */
 		execinfra.ProcStateOpts{
 			InputsToDrain: []execinfra.RowSource{input},
+			TrailingMetaCallback: func() []execinfrapb.ProducerMetadata {
+				rd.close()
+				return nil
+			},
 		}); err != nil {
 		return nil, err
 	}
@@ -81,6 +88,16 @@ func newRestoreDataProcessor(
 // Start is part of the RowSource interface.
 func (rd *restoreDataProcessor) Start(ctx context.Context) {
 	ctx = rd.StartInternal(ctx, restoreDataProcName)
+
+	evalCtx := rd.FlowCtx.EvalCtx
+	db := rd.FlowCtx.Cfg.DB
+	var err error
+	rd.batcher, err = bulk.MakeStreamSSTBatcher(ctx, db, evalCtx.Settings,
+		func() int64 { return storageccl.MaxImportBatchSize(evalCtx.Settings) })
+	if err != nil {
+		rd.MoveToDraining(errors.Wrap(err, "creating sst batcher"))
+		return
+	}
 	rd.input.Start(ctx)
 }
 
@@ -152,6 +169,19 @@ func (rd *restoreDataProcessor) Next() (rowenc.EncDatumRow, *execinfrapb.Produce
 	return nil, &execinfrapb.ProducerMetadata{BulkProcessorProgress: &prog}
 }
 
+// ConsumerClosed is part of the RowSource interface.
+func (rd *restoreDataProcessor) ConsumerClosed() {
+	rd.close()
+}
+
+func (rd *restoreDataProcessor) close() {
+	if rd.InternalClose() {
+		if rd.batcher != nil {
+			rd.batcher.Close()
+		}
+	}
+}
+
 func init() {
 	rowexec.NewRestoreDataProcessor = newRestoreDataProcessor
 }
@@ -159,10 +189,13 @@ func init() {
 func (rd *restoreDataProcessor) processRestoreSpanEntry(
 	entry execinfrapb.RestoreSpanEntry, newSpanKey roachpb.Key,
 ) (roachpb.BulkOpSummary, error) {
-	db := rd.flowCtx.Cfg.DB
 	ctx := rd.Ctx
-	evalCtx := rd.EvalCtx
 	var summary roachpb.BulkOpSummary
+
+	rd.rowCount.Reset()
+	if rd.batcher == nil {
+		return summary, errors.New("batcher unexpectedly not initialized")
+	}
 
 	// The sstables only contain MVCC data and no intents, so using an MVCC
 	// iterator is sufficient.
@@ -187,13 +220,6 @@ func (rd *restoreDataProcessor) processRestoreSpanEntry(
 		defer iter.Close()
 		iters = append(iters, iter)
 	}
-
-	batcher, err := bulk.MakeSSTBatcher(ctx, db, evalCtx.Settings,
-		func() int64 { return storageccl.MaxImportBatchSize(evalCtx.Settings) })
-	if err != nil {
-		return summary, err
-	}
-	defer batcher.Close()
 
 	startKeyMVCC, endKeyMVCC := storage.MVCCKey{Key: entry.Span.Key},
 		storage.MVCCKey{Key: entry.Span.EndKey}
@@ -254,12 +280,15 @@ func (rd *restoreDataProcessor) processRestoreSpanEntry(
 		if log.V(3) {
 			log.Infof(ctx, "Put %s -> %s", key.Key, value.PrettyPrint())
 		}
-		if err := batcher.AddMVCCKey(ctx, key, value.RawBytes); err != nil {
+		// The SST batcher will always accept this key, so its safe to count the
+		// key as ingested.
+		rd.rowCount.Count(key.Key)
+		if err := rd.batcher.AddMVCCKey(ctx, key, value.RawBytes); err != nil {
 			return summary, errors.Wrapf(err, "adding to batch: %s -> %s", key, value.PrettyPrint())
 		}
 	}
 	// Flush out the last batch.
-	if err := batcher.Flush(ctx); err != nil {
+	if err := rd.batcher.Flush(ctx); err != nil {
 		return summary, err
 	}
 	log.Event(ctx, "done")
@@ -270,5 +299,5 @@ func (rd *restoreDataProcessor) processRestoreSpanEntry(
 		}
 	}
 
-	return batcher.GetSummary(), nil
+	return rd.rowCount.BulkOpSummary, nil
 }
