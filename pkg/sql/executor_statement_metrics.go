@@ -283,6 +283,8 @@ func shouldIncludeStmtInLatencyMetrics(stmt *Statement) bool {
 		return false
 	case *tree.ReplicationStream:
 		return false
+	case *tree.CreateChangefeed:
+		return false
 	}
 
 	return true
