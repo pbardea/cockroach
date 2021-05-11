@@ -111,26 +111,40 @@ func (rd *restoreDataProcessor) Start(ctx context.Context) {
 	rd.input.Start(ctx)
 
 	rd.phaseGroup = ctxgroup.WithContext(ctx)
-	entries := make(chan execinfrapb.RestoreSpanEntry, rd.numWorkers)
+	entryGroups := make(chan []execinfrapb.RestoreSpanEntry, rd.numWorkers)
 	rd.phaseGroup.GoCtx(func(ctx context.Context) error {
-		defer close(entries)
-		return inputReader(ctx, rd.input, entries, rd.metaCh)
+		defer close(entryGroups)
+		return inputReader(ctx, rd.input, entryGroups, rd.metaCh)
 	})
 
 	rd.phaseGroup.GoCtx(func(ctx context.Context) error {
 		defer close(rd.progCh)
-		return rd.runRestoreWorkers(entries)
+		return rd.runRestoreWorkers(entryGroups)
 	})
 }
 
 func inputReader(
 	ctx context.Context,
 	input execinfra.RowSource,
-	entries chan execinfrapb.RestoreSpanEntry,
+	entryGroups chan []execinfrapb.RestoreSpanEntry,
 	metaCh chan *execinfrapb.ProducerMetadata,
 ) error {
 	var alloc rowenc.DatumAlloc
 
+	ctxDone := ctx.Done()
+	sendGroup := func(entryGroupToSend []execinfrapb.RestoreSpanEntry) error {
+		select {
+		case entryGroups <- entryGroupToSend:
+		case <-ctxDone:
+			return ctx.Err()
+		}
+
+		return nil
+	}
+
+	maxEntryBatchSize := 10
+	entryGroup := make([]execinfrapb.RestoreSpanEntry, 0, maxEntryBatchSize)
+	var lastEndKey roachpb.Key
 	for {
 		// We read rows from the SplitAndScatter processor. We expect each row to
 		// contain 2 columns. The first is used to route the row to this processor,
@@ -150,7 +164,12 @@ func inputReader(
 		}
 
 		if row == nil {
-			// Consumed all rows.
+			// Send the last group.
+			if len(entryGroup) > 0 {
+				if err := sendGroup(entryGroup); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 
@@ -171,37 +190,43 @@ func inputReader(
 			return errors.Wrap(err, "un-marshaling restore span entry")
 		}
 
-		select {
-		case entries <- entry:
-		case <-ctx.Done():
-			return ctx.Err()
+		if lastEndKey.Compare(entry.Span.Key) != 0 || len(entryGroup) >= maxEntryBatchSize {
+			// Send the currently accumulated group, and create a new group
+			// with this entry that doesn't belong to the previous group.
+			if err := sendGroup(entryGroup); err != nil {
+				return err
+			}
+			entryGroup = make([]execinfrapb.RestoreSpanEntry, 0, maxEntryBatchSize)
 		}
+
+		entryGroup = append(entryGroup, entry)
 	}
 }
 
-func (rd *restoreDataProcessor) runRestoreWorkers(entries chan execinfrapb.RestoreSpanEntry) error {
+func (rd *restoreDataProcessor) runRestoreWorkers(entryGroups chan []execinfrapb.RestoreSpanEntry) error {
 	numWorkers := numWorkersSetting.Get(&rd.flowCtx.EvalCtx.Settings.SV)
 
 	return ctxgroup.GroupWorkers(rd.Ctx, int(numWorkers), func(ctx context.Context, n int) error {
-		for entry := range entries {
-			newSpanKey, err := rewriteBackupSpanKey(rd.flowCtx.Codec(), rd.kr, entry.Span.Key)
-			if err != nil {
-				return errors.Wrap(err, "re-writing span key to import")
-			}
-
-			summary, err := rd.processRestoreSpanEntry(entry, newSpanKey)
+		for entryGroup := range entryGroups {
+			summary, err := rd.processRestoreSpanEntryGroup(entryGroup)
 			if err != nil {
 				return err
 			}
 
-			progDetails := RestoreProgress{}
-			progDetails.Summary = countRows(summary, rd.spec.PKIDs)
-			progDetails.ProgressIdx = entry.ProgressIdx
-			progDetails.DataSpan = entry.Span
-			select {
-			case rd.progCh <- progDetails:
-			case <-ctx.Done():
-				return ctx.Err()
+			for i, entry := range entryGroup {
+				progDetails := RestoreProgress{}
+				if i == len(entryGroup)-1 {
+					// The last entry is responsible for relaying the number of
+					// rows ingested.
+					progDetails.Summary = countRows(summary, rd.spec.PKIDs)
+				}
+				progDetails.ProgressIdx = entry.ProgressIdx
+				progDetails.DataSpan = entry.Span
+				select {
+				case rd.progCh <- progDetails:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 		}
 
@@ -259,24 +284,45 @@ func init() {
 	rowexec.NewRestoreDataProcessor = newRestoreDataProcessor
 }
 
-func (rd *restoreDataProcessor) processRestoreSpanEntry(
-	entry execinfrapb.RestoreSpanEntry, newSpanKey roachpb.Key,
-) (roachpb.BulkOpSummary, error) {
+func (rd *restoreDataProcessor) processRestoreSpanEntryGroup(entryGroup []execinfrapb.RestoreSpanEntry) (roachpb.BulkOpSummary, error) {
 	db := rd.flowCtx.Cfg.DB
-	ctx := rd.Ctx
 	evalCtx := rd.EvalCtx
 	var summary roachpb.BulkOpSummary
+
+	batcher, err := bulk.MakeSSTBatcher(rd.Ctx, db, evalCtx.Settings,
+		func() int64 { return storageccl.MaxImportBatchSize(evalCtx.Settings) })
+	if err != nil {
+		return summary, err
+	}
+	defer batcher.Close()
+
+	for _, entry := range entryGroup {
+		rd.processRestoreSpanEntry(batcher, entry)
+	}
+
+	// Flush out the last batch.
+	if err := batcher.Flush(rd.Ctx); err != nil {
+		return summary, err
+	}
+
+	return batcher.GetSummary(), nil
+}
+
+func (rd *restoreDataProcessor) processRestoreSpanEntry(
+	batcher *bulk.SSTBatcher, entry execinfrapb.RestoreSpanEntry,
+) error {
+	ctx := rd.Ctx
 
 	// The sstables only contain MVCC data and no intents, so using an MVCC
 	// iterator is sufficient.
 	var iters []storage.SimpleMVCCIterator
 
 	for _, file := range entry.Files {
-		log.VEventf(ctx, 2, "import file %s %s", file.Path, newSpanKey)
+		log.VEventf(ctx, 2, "import file %s", file.Path, entry.Span.Key)
 
 		dir, err := rd.flowCtx.Cfg.ExternalStorage(ctx, file.Dir)
 		if err != nil {
-			return summary, err
+			return err
 		}
 		defer func() {
 			if err := dir.Close(); err != nil {
@@ -285,18 +331,11 @@ func (rd *restoreDataProcessor) processRestoreSpanEntry(
 		}()
 		iter, err := storageccl.ExternalSSTReader(ctx, dir, file.Path, rd.spec.Encryption)
 		if err != nil {
-			return summary, err
+			return err
 		}
 		defer iter.Close()
 		iters = append(iters, iter)
 	}
-
-	batcher, err := bulk.MakeSSTBatcher(ctx, db, evalCtx.Settings,
-		func() int64 { return storageccl.MaxImportBatchSize(evalCtx.Settings) })
-	if err != nil {
-		return summary, err
-	}
-	defer batcher.Close()
 
 	startKeyMVCC, endKeyMVCC := storage.MVCCKey{Key: entry.Span.Key},
 		storage.MVCCKey{Key: entry.Span.EndKey}
@@ -307,7 +346,7 @@ func (rd *restoreDataProcessor) processRestoreSpanEntry(
 	for iter.SeekGE(startKeyMVCC); ; {
 		ok, err := iter.Valid()
 		if err != nil {
-			return summary, err
+			return err
 		}
 		if !ok {
 			break
@@ -339,7 +378,7 @@ func (rd *restoreDataProcessor) processRestoreSpanEntry(
 
 		key.Key, ok, err = rd.kr.RewriteKey(key.Key, false /* isFromSpan */)
 		if err != nil {
-			return summary, err
+			return err
 		}
 		if !ok {
 			// If the key rewriter didn't match this key, it's not data for the
@@ -354,18 +393,13 @@ func (rd *restoreDataProcessor) processRestoreSpanEntry(
 		value.ClearChecksum()
 		value.InitChecksum(key.Key)
 
-		if log.V(3) {
+		if log.V(5) {
 			log.Infof(ctx, "Put %s -> %s", key.Key, value.PrettyPrint())
 		}
 		if err := batcher.AddMVCCKey(ctx, key, value.RawBytes); err != nil {
-			return summary, errors.Wrapf(err, "adding to batch: %s -> %s", key, value.PrettyPrint())
+			return errors.Wrapf(err, "adding to batch: %s -> %s", key, value.PrettyPrint())
 		}
 	}
-	// Flush out the last batch.
-	if err := batcher.Flush(ctx); err != nil {
-		return summary, err
-	}
-	log.Event(ctx, "done")
 
 	if restoreKnobs, ok := rd.flowCtx.TestingKnobs().BackupRestoreTestingKnobs.(*sql.BackupRestoreTestingKnobs); ok {
 		if restoreKnobs.RunAfterProcessingRestoreSpanEntry != nil {
@@ -373,5 +407,5 @@ func (rd *restoreDataProcessor) processRestoreSpanEntry(
 		}
 	}
 
-	return batcher.GetSummary(), nil
+	return nil
 }

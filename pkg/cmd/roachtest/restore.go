@@ -367,6 +367,9 @@ func registerRestore(r *testRegistry) {
 					defer hc.Done()
 					t.Status(`running restore`)
 					c.Run(ctx, c.Node(1), `./cockroach sql --insecure -e "CREATE DATABASE restore2tb"`)
+					c.Run(ctx, c.Node(1), `./cockroach sql --insecure -e "SET CLUSTER SETTING kv.bulk_io_write.concurrent_addsstable_requests = 5"`)
+					c.Run(ctx, c.Node(1), `./cockroach sql --insecure -e "SET CLUSTER SETTING kv.bulk_io_write.restore_node_concurrency = 5"`)
+					c.Run(ctx, c.Node(1), `./cockroach sql --insecure -e "SET CLUSTER SETTING kv.bulk_ingest.batch_size = '1GB';"`)
 					// Tick once before starting the restore, and once after to capture the
 					// total elapsed time. This is used by roachperf to compute and display
 					// the average MB/sec per node.

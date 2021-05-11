@@ -134,7 +134,7 @@ var importRequestsLimit = settings.RegisterIntSetting(
 var addSSTableRequestLimit = settings.RegisterIntSetting(
 	"kv.bulk_io_write.concurrent_addsstable_requests",
 	"number of AddSSTable requests a store will handle concurrently before queuing",
-	1,
+	5,
 	settings.PositiveInt,
 )
 
