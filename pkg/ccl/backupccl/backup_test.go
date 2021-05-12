@@ -447,6 +447,7 @@ func TestBackupRestoreMultiNodeRemote(t *testing.T) {
 
 func TestBackupRestorePartitioned(t *testing.T) {
 	defer leaktest.AfterTest(t)()
+	skip.WithIssue(t, 64974, "flaky test")
 	defer log.Scope(t).Close(t)
 
 	const numAccounts = 1000
