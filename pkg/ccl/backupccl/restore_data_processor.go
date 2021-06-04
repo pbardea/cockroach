@@ -143,7 +143,7 @@ func (rd *restoreDataProcessor) Start(ctx context.Context) {
 
 	rd.phaseGroup.GoCtx(func(ctx context.Context) error {
 		defer close(rd.progCh)
-		return rd.runRestoreWorkers(entries)
+		return rd.runRestoreWorkers(rd.EvalCtx.DB, entries)
 	})
 }
 
@@ -210,7 +210,9 @@ func inputReader(
 	}
 }
 
-func (rd *restoreDataProcessor) runRestoreWorkers(entries chan execinfrapb.RestoreSpanEntry) error {
+func (rd *restoreDataProcessor) runRestoreWorkers(
+	db bulk.SSTSender, entries chan execinfrapb.RestoreSpanEntry,
+) error {
 	return ctxgroup.GroupWorkers(rd.Ctx, maxConcurrentRestoreWorkers, func(ctx context.Context, n int) error {
 		for {
 			done, err := func() (done bool, _ error) {
@@ -226,7 +228,7 @@ func (rd *restoreDataProcessor) runRestoreWorkers(entries chan execinfrapb.Resto
 					return done, nil
 				}
 
-				summary, err := rd.processRestoreSpanEntry(entry)
+				summary, err := rd.processRestoreSpanEntry(db, entry)
 				if err != nil {
 					return done, err
 				}
@@ -252,9 +254,8 @@ func (rd *restoreDataProcessor) runRestoreWorkers(entries chan execinfrapb.Resto
 }
 
 func (rd *restoreDataProcessor) processRestoreSpanEntry(
-	entry execinfrapb.RestoreSpanEntry,
+	db bulk.SSTSender, entry execinfrapb.RestoreSpanEntry,
 ) (roachpb.BulkOpSummary, error) {
-	db := rd.flowCtx.Cfg.DB
 	ctx := rd.Ctx
 	evalCtx := rd.EvalCtx
 	var summary roachpb.BulkOpSummary

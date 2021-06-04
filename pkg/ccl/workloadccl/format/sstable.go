@@ -55,8 +55,6 @@ func ToTableDescriptor(
 // ToSSTable constructs a single sstable with the kvs necessary to represent a
 // workload.Table as a CockroachDB SQL table. This sstable is suitable for
 // handing to AddSSTable or RocksDB's IngestExternalFile.
-//
-// TODO(dan): Finally remove sampledataccl in favor of this.
 func ToSSTable(t workload.Table, tableID descpb.ID, ts time.Time) ([]byte, error) {
 	ctx := context.Background()
 	tableDesc, err := ToTableDescriptor(t, tableID, ts)

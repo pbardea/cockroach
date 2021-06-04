@@ -271,7 +271,8 @@ func runTestImport(t *testing.T, init func(*cluster.Settings)) {
 		EvalCtx: &tree.EvalContext{
 			Codec:    keys.SystemSQLCodec,
 			Settings: s.ClusterSettings(),
-		}}
+		},
+	}
 
 	storage, err := cloud.ExternalStorageConfFromURI("nodelocal://0/foo", security.RootUserName())
 	if err != nil {

@@ -1333,6 +1333,8 @@ func (m *ExternalStorage) AccessIsWithExplicitAuth() bool {
 		return true
 	case ExternalStorageProvider_null:
 		return true
+	case ExternalStorageProvider_test:
+		return true
 	case ExternalStorageProvider_http:
 		// Arbitrary network endpoints may be accessible only via the node and thus
 		// make use of its implicit access to them.
