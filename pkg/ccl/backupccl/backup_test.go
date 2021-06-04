@@ -8390,3 +8390,24 @@ func TestBackupWorkerFailure(t *testing.T) {
 	sqlDB.QueryRow(t, `SELECT count(*) FROM data.bank`).Scan(&actualCount)
 	require.Equal(t, expectedCount, actualCount)
 }
+
+func TestTemp(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	_, tc, _, _, cleanup := BackupRestoreTestSetup(t, singleNode, 10, InitManualReplication)
+	conn := tc.Conns[0]
+	sqlDB := sqlutils.MakeSQLRunner(conn)
+	defer cleanup()
+
+	sqlDB.Exec(t, `
+CREATE DATABASE test;
+USE test;
+CREATE TABLE data (a INT);
+CREATE VIEW v AS SELECT a FROM data;
+BACKUP TO 'nodelocal://1/foo' WITH revision_history;
+BACKUP TO 'nodelocal://1/foo' WITH revision_history;
+ALTER VIEW v RENAME TO v2;
+BACKUP TO 'nodelocal://1/foo' WITH revision_history;
+`)
+}
