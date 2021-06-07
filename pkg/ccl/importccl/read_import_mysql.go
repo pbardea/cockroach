@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/ccl/descingest"
 	"io"
 	"strconv"
 	"strings"
@@ -296,7 +297,7 @@ func readMysqlCreateTable(
 	p sql.JobExecContext,
 	startingID, parentID descpb.ID,
 	match string,
-	fks fkHandler,
+	fks descingest.FKHandler,
 	seqVals map[descpb.ID]int64,
 	owner security.SQLUsername,
 	walltime int64,
@@ -349,7 +350,7 @@ func readMysqlCreateTable(
 	if match != "" && !found {
 		return nil, errors.Errorf("table %q not found in file (found tables: %s)", match, strings.Join(names, ", "))
 	}
-	if err := addDelayedFKs(ctx, fkDefs, fks.resolver, evalCtx); err != nil {
+	if err := addDelayedFKs(ctx, fkDefs, fks.Resolver, evalCtx); err != nil {
 		return nil, err
 	}
 	return ret, nil
@@ -375,7 +376,7 @@ func mysqlTableToCockroach(
 	parentID, id descpb.ID,
 	name string,
 	in *mysql.TableSpec,
-	fks fkHandler,
+	fks descingest.FKHandler,
 	seqVals map[descpb.ID]int64,
 	owner security.SQLUsername,
 	walltime int64,
@@ -455,7 +456,7 @@ func mysqlTableToCockroach(
 		if err != nil {
 			return nil, nil, err
 		}
-		fks.resolver.tableNameToDesc[seqName] = seqDesc
+		fks.Resolver.TableNameToDesc[seqName] = seqDesc
 		id++
 	}
 
@@ -504,7 +505,7 @@ func mysqlTableToCockroach(
 	if p != nil {
 		semaCtxPtr = p.SemaCtx()
 	}
-	desc, err := MakeSimpleTableDescriptor(ctx, semaCtxPtr, evalCtx.Settings, stmt, parentID, keys.PublicSchemaID, id, fks, time.WallTime)
+	desc, err := descingest.MakeSimpleTableDescriptor(ctx, semaCtxPtr, evalCtx.Settings, stmt, parentID, keys.PublicSchemaID, id, fks, time.WallTime)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -513,10 +514,10 @@ func mysqlTableToCockroach(
 	for _, raw := range in.Constraints {
 		switch i := raw.Details.(type) {
 		case *mysql.ForeignKeyDefinition:
-			if !fks.allowed {
+			if !fks.Allowed {
 				return nil, nil, errors.Errorf("foreign keys not supported: %s", mysql.String(raw))
 			}
-			if fks.skip {
+			if fks.Skip {
 				continue
 			}
 			fromCols := i.Source
@@ -543,7 +544,7 @@ func mysqlTableToCockroach(
 			fkDefs = append(fkDefs, delayedFK{desc, d})
 		}
 	}
-	fks.resolver.tableNameToDesc[desc.Name] = desc
+	fks.Resolver.TableNameToDesc[desc.Name] = desc
 	if seqDesc != nil {
 		return []*tabledesc.Mutable{seqDesc, desc}, fkDefs, nil
 	}
@@ -570,7 +571,7 @@ type delayedFK struct {
 }
 
 func addDelayedFKs(
-	ctx context.Context, defs []delayedFK, resolver fkResolver, evalCtx *tree.EvalContext,
+	ctx context.Context, defs []delayedFK, resolver descingest.FKResolver, evalCtx *tree.EvalContext,
 ) error {
 	for _, def := range defs {
 		if err := sql.ResolveFK(
@@ -579,7 +580,7 @@ func addDelayedFKs(
 		); err != nil {
 			return err
 		}
-		if err := fixDescriptorFKState(def.tbl); err != nil {
+		if err := descingest.FixDescriptorFKState(def.tbl); err != nil {
 			return err
 		}
 		if err := def.tbl.AllocateIDs(ctx); err != nil {

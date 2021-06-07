@@ -11,6 +11,7 @@ package importccl
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/ccl/descingest"
 	"io/ioutil"
 	"math"
 	"net/url"
@@ -910,7 +911,7 @@ func newTestSpec(
 	switch format.Format {
 	case roachpb.IOFileFormat_CSV:
 		descr = descForTable(ctx, t,
-			"CREATE TABLE simple (i INT PRIMARY KEY, s text )", 100, 200, NoFKs)
+			"CREATE TABLE simple (i INT PRIMARY KEY, s text )", 100, 200, descingest.NoFKs)
 	case
 		roachpb.IOFileFormat_Mysqldump,
 		roachpb.IOFileFormat_MysqlOutfile,
@@ -918,7 +919,7 @@ func newTestSpec(
 		roachpb.IOFileFormat_PgCopy,
 		roachpb.IOFileFormat_Avro:
 		descr = descForTable(ctx, t,
-			"CREATE TABLE simple (i INT PRIMARY KEY, s text, b bytea default null)", 100, 200, NoFKs)
+			"CREATE TABLE simple (i INT PRIMARY KEY, s text, b bytea default null)", 100, 200, descingest.NoFKs)
 	default:
 		t.Fatalf("Unsupported input format: %v", format)
 	}

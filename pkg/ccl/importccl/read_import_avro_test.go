@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/ccl/descingest"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -199,7 +200,7 @@ func newTestHelper(ctx context.Context, t *testing.T, gens ...avroGen) *testHelp
 
 	return &testHelper{
 		schemaJSON: string(schemaJSON),
-		schemaTable: descForTable(ctx, t, createStmt, 100, 200, NoFKs).
+		schemaTable: descForTable(ctx, t, createStmt, 100, 200, descingest.NoFKs).
 			ImmutableCopy().(catalog.TableDescriptor),
 		codec:    codec,
 		gens:     gens,
@@ -581,7 +582,7 @@ func benchmarkAvroImport(b *testing.B, avroOpts roachpb.AvroOptions, testData st
 	semaCtx := tree.MakeSemaContext()
 	evalCtx := tree.MakeTestingEvalContext(st)
 
-	tableDesc, err := MakeSimpleTableDescriptor(ctx, &semaCtx, st, create, descpb.ID(100), keys.PublicSchemaID, descpb.ID(100), NoFKs, 1)
+	tableDesc, err := descingest.MakeSimpleTableDescriptor(ctx, &semaCtx, st, create, descpb.ID(100), keys.PublicSchemaID, descpb.ID(100), descingest.NoFKs, 1)
 	require.NoError(b, err)
 
 	kvCh := make(chan row.KVBatch)

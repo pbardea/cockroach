@@ -11,9 +11,10 @@ package format
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/ccl/descingest"
+	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"time"
 
-	"github.com/cockroachdb/cockroach/pkg/ccl/importccl"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
@@ -44,8 +45,9 @@ func ToTableDescriptor(
 		return nil, errors.Errorf("expected *tree.CreateTable got %T", stmt)
 	}
 	const parentID descpb.ID = keys.MaxReservedDescID
-	tableDesc, err := importccl.MakeSimpleTableDescriptor(
-		ctx, &semaCtx, nil /* settings */, createTable, parentID, keys.PublicSchemaID, tableID, importccl.NoFKs, ts.UnixNano())
+	st := cluster.MakeTestingClusterSettings()
+	tableDesc, err := descingest.MakeSimpleTableDescriptor(
+		ctx, &semaCtx, st, createTable, parentID, keys.PublicSchemaID, tableID, descingest.NoFKs, ts.UnixNano())
 	if err != nil {
 		return nil, err
 	}
@@ -63,13 +65,16 @@ func ToSSTable(t workload.Table, tableID descpb.ID, ts time.Time) ([]byte, error
 	}
 
 	kvCh := make(chan row.KVBatch)
-	wc := importccl.NewWorkloadKVConverter(
-		0, tableDesc, t.InitialRows, 0, t.InitialRows.NumBatches, kvCh)
+	wc := workload.NewWorkloadKVConverter(
+		0, tableDesc, t.InitialRows,
+		0 /* batch start */, t.InitialRows.NumBatches /* batch end */,
+		kvCh,
+	)
 
 	g := ctxgroup.WithContext(ctx)
 	g.GoCtx(func(ctx context.Context) error {
 		defer close(kvCh)
-		evalCtx := &tree.EvalContext{SessionData: &sessiondata.SessionData{}}
+		evalCtx := &tree.EvalContext{SessionData: &sessiondata.SessionData{}, Codec: keys.SystemSQLCodec}
 		return wc.Worker(ctx, evalCtx)
 	})
 	var sst []byte

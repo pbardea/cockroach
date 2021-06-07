@@ -11,6 +11,7 @@ package importccl
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/ccl/descingest"
 	"io"
 	"math"
 	"strconv"
@@ -35,7 +36,7 @@ import (
 )
 
 func descForTable(
-	ctx context.Context, t *testing.T, create string, parent, id descpb.ID, fks fkHandler,
+	ctx context.Context, t *testing.T, create string, parent, id descpb.ID, fks descingest.FKHandler,
 ) *tabledesc.Mutable {
 	t.Helper()
 	parsed, err := parser.Parse(create)
@@ -70,16 +71,16 @@ func descForTable(
 		if err != nil {
 			t.Fatal(err)
 		}
-		fks.resolver.tableNameToDesc[name] = desc
+		fks.Resolver.TableNameToDesc[name] = desc
 	} else {
 		stmt = parsed[0].AST.(*tree.CreateTable)
 	}
 	semaCtx := tree.MakeSemaContext()
-	table, err := MakeSimpleTableDescriptor(context.Background(), &semaCtx, settings, stmt, parent, keys.PublicSchemaID, id, fks, nanos)
+	table, err := descingest.MakeSimpleTableDescriptor(context.Background(), &semaCtx, settings, stmt, parent, keys.PublicSchemaID, id, fks, nanos)
 	if err != nil {
 		t.Fatalf("could not interpret %q: %v", create, err)
 	}
-	if err := fixDescriptorFKState(table); err != nil {
+	if err := descingest.FixDescriptorFKState(table); err != nil {
 		t.Fatal(err)
 	}
 	return table

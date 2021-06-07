@@ -10,6 +10,7 @@ package importccl
 
 import (
 	"context"
+	"github.com/cockroachdb/cockroach/pkg/ccl/descingest"
 	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/keys"
@@ -75,7 +76,7 @@ func TestMakeSimpleTableDescriptorErrors(t *testing.T) {
 			if !ok {
 				t.Fatal("expected CREATE TABLE statement in table file")
 			}
-			_, err = MakeSimpleTableDescriptor(ctx, &semaCtx, st, create, defaultCSVParentID, keys.PublicSchemaID, defaultCSVTableID, NoFKs, 0)
+			_, err = descingest.MakeSimpleTableDescriptor(ctx, &semaCtx, st, create, defaultCSVParentID, keys.PublicSchemaID, defaultCSVTableID, descingest.NoFKs, 0)
 			if !testutils.IsError(err, tc.error) {
 				t.Fatalf("expected %v, got %+v", tc.error, err)
 			}

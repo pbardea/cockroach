@@ -8,7 +8,8 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-package amazon
+// TODO: Rename teestsink to TestStorage
+package testsink
 
 import (
 	"bytes"

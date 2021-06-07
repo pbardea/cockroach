@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/ccl/descingest"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -44,7 +45,7 @@ func TestMysqldumpDataReader(t *testing.T) {
 	files := getMysqldumpTestdata(t)
 
 	ctx := context.Background()
-	table := descForTable(ctx, t, `CREATE TABLE simple (i INT PRIMARY KEY, s text, b bytea)`, 100, 200, NoFKs)
+	table := descForTable(ctx, t, `CREATE TABLE simple (i INT PRIMARY KEY, s text, b bytea)`, 100, 200, descingest.NoFKs)
 	tables := map[string]*execinfrapb.ReadImportDataSpec_ImportTable{"simple": {Desc: table.TableDesc()}}
 	opts := roachpb.MysqldumpOptions{}
 
@@ -111,7 +112,7 @@ func readFile(t *testing.T, name string) string {
 }
 
 func readMysqlCreateFrom(
-	t *testing.T, path, name string, id descpb.ID, fks fkHandler,
+	t *testing.T, path, name string, id descpb.ID, fks descingest.FKHandler,
 ) *descpb.TableDescriptor {
 	t.Helper()
 	f, err := os.Open(path)
@@ -134,18 +135,18 @@ func TestMysqldumpSchemaReader(t *testing.T) {
 
 	files := getMysqldumpTestdata(t)
 
-	simpleTable := descForTable(ctx, t, readFile(t, `simple.cockroach-schema.sql`), expectedParent, 52, NoFKs)
-	referencedSimple := descForTable(ctx, t, readFile(t, `simple.cockroach-schema.sql`), expectedParent, 52, NoFKs)
-	fks := fkHandler{
-		allowed: true,
-		resolver: fkResolver{
-			tableNameToDesc: map[string]*tabledesc.Mutable{referencedSimple.Name: referencedSimple},
-			format:          mysqlDumpFormat()},
+	simpleTable := descForTable(ctx, t, readFile(t, `simple.cockroach-schema.sql`), expectedParent, 52, descingest.NoFKs)
+	referencedSimple := descForTable(ctx, t, readFile(t, `simple.cockroach-schema.sql`), expectedParent, 52, descingest.NoFKs)
+	fks := descingest.FKHandler{
+		Allowed: true,
+		Resolver: descingest.FKResolver{
+			TableNameToDesc: map[string]*tabledesc.Mutable{referencedSimple.Name: referencedSimple},
+			Format:          mysqlDumpFormat()},
 	}
 
 	t.Run("simple", func(t *testing.T) {
 		expected := simpleTable
-		got := readMysqlCreateFrom(t, files.simple, "", 51, NoFKs)
+		got := readMysqlCreateFrom(t, files.simple, "", 51, descingest.NoFKs)
 		compareTables(t, expected.TableDesc(), got)
 	})
 
@@ -157,21 +158,21 @@ func TestMysqldumpSchemaReader(t *testing.T) {
 	})
 
 	t.Run("everything", func(t *testing.T) {
-		expected := descForTable(ctx, t, readFile(t, `everything.cockroach-schema.sql`), expectedParent, 53, NoFKs)
-		got := readMysqlCreateFrom(t, files.everything, "", 53, NoFKs)
+		expected := descForTable(ctx, t, readFile(t, `everything.cockroach-schema.sql`), expectedParent, 53, descingest.NoFKs)
+		got := readMysqlCreateFrom(t, files.everything, "", 53, descingest.NoFKs)
 		compareTables(t, expected.TableDesc(), got)
 	})
 
 	t.Run("simple-in-multi", func(t *testing.T) {
 		expected := simpleTable
-		got := readMysqlCreateFrom(t, files.wholeDB, "simple", 51, NoFKs)
+		got := readMysqlCreateFrom(t, files.wholeDB, "simple", 51, descingest.NoFKs)
 		compareTables(t, expected.TableDesc(), got)
 	})
 
 	t.Run("third-in-multi", func(t *testing.T) {
-		skip := fkHandler{allowed: true, skip: true, resolver: fkResolver{
-			tableNameToDesc: make(map[string]*tabledesc.Mutable),
-			format:          mysqlDumpFormat(),
+		skip := descingest.FKHandler{Allowed: true, Skip: true, Resolver: descingest.FKResolver{
+			TableNameToDesc: make(map[string]*tabledesc.Mutable),
+			Format:          mysqlDumpFormat(),
 		}}
 		expected := descForTable(ctx, t, readFile(t, `third.cockroach-schema.sql`), expectedParent, 52, skip)
 		got := readMysqlCreateFrom(t, files.wholeDB, "third", 51, skip)

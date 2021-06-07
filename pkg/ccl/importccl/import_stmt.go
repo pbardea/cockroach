@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/ccl/descingest"
 	"io/ioutil"
 	"math"
 	"net/url"
@@ -833,7 +834,7 @@ func importPlanHook(
 					if err != nil {
 						return err
 					}
-					create, err = readCreateTableFromStore(ctx, filename,
+					create, err = descingest.ReadCreateTableFromStore(ctx, filename,
 						p.ExecCfg().DistSQLSrv.ExternalStorageFromURI, p.User())
 					if err != nil {
 						return err
@@ -854,8 +855,8 @@ func importPlanHook(
 						"IMPORT to REGIONAL BY ROW table not supported",
 					)
 				}
-				tbl, err := MakeSimpleTableDescriptor(
-					ctx, p.SemaCtx(), p.ExecCfg().Settings, create, parentID, parentSchemaID, defaultCSVTableID, NoFKs, walltime)
+				tbl, err := descingest.MakeSimpleTableDescriptor(
+					ctx, p.SemaCtx(), p.ExecCfg().Settings, create, parentID, parentSchemaID, defaultCSVTableID, descingest.NoFKs, walltime)
 				if err != nil {
 					return err
 				}
@@ -1750,16 +1751,16 @@ func parseAndCreateBundleTableDescs(
 	}
 	defer reader.Close()
 
-	fks := fkHandler{skip: skipFKs, allowed: true, resolver: fkResolver{
-		tableNameToDesc: make(map[string]*tabledesc.Mutable),
+	fks := descingest.FKHandler{Skip: skipFKs, Allowed: true, Resolver: descingest.FKResolver{
+		TableNameToDesc: make(map[string]*tabledesc.Mutable),
 	}}
 	switch format.Format {
 	case roachpb.IOFileFormat_Mysqldump:
-		fks.resolver.format.Format = roachpb.IOFileFormat_Mysqldump
+		fks.Resolver.Format.Format = roachpb.IOFileFormat_Mysqldump
 		evalCtx := &p.ExtendedEvalContext().EvalContext
 		tableDescs, err = readMysqlCreateTable(ctx, reader, evalCtx, p, defaultCSVTableID, parentID, tableName, fks, seqVals, owner, walltime)
 	case roachpb.IOFileFormat_PgDump:
-		fks.resolver.format.Format = roachpb.IOFileFormat_PgDump
+		fks.Resolver.Format.Format = roachpb.IOFileFormat_PgDump
 		evalCtx := &p.ExtendedEvalContext().EvalContext
 
 		// Setup a logger to handle unsupported DDL statements in the PGDUMP file.

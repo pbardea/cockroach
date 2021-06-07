@@ -389,7 +389,7 @@ func runTestImport(t *testing.T, init func(*cluster.Settings)) {
 			mockRestoreDataProcessor, err := newTestingRestoreDataProcessor(ctx, &evalCtx, &flowCtx,
 				mockRestoreDataSpec)
 			require.NoError(t, err)
-			_, err = mockRestoreDataProcessor.processRestoreSpanEntry(restoreSpanEntry)
+			_, err = mockRestoreDataProcessor.processRestoreSpanEntry(evalCtx.DB, restoreSpanEntry)
 			require.NoError(t, err)
 
 			clientKVs, err := kvDB.Scan(ctx, reqStartKey, reqEndKey, 0)

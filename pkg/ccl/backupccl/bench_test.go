@@ -10,7 +10,7 @@ package backupccl
 
 import (
 	"context"
-	fmt "fmt"
+	"fmt"
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/blobs"
 	"github.com/cockroachdb/cockroach/pkg/security"
@@ -24,14 +24,15 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/workloadccl/format"
 	"github.com/cockroachdb/cockroach/pkg/keys"
-	roachpb "github.com/cockroachdb/cockroach/pkg/roachpb"
-	descpb "github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
+	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/workload/tpcc"
 	"github.com/stretchr/testify/require"
+	_ "github.com/cockroachdb/cockroach/pkg/storage/cloud/testsink"
 )
 
 /*

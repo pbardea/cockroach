@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/ccl/descingest"
 	"math"
 	"math/rand"
 	"strings"
@@ -19,7 +20,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/apd/v2"
-	"github.com/cockroachdb/cockroach/pkg/ccl/importccl"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
@@ -68,8 +68,8 @@ func parseTableDesc(createTableStmt string) (catalog.TableDescriptor, error) {
 	const parentID = descpb.ID(keys.MaxReservedDescID + 1)
 	const tableID = descpb.ID(keys.MaxReservedDescID + 2)
 	semaCtx := makeTestSemaCtx()
-	mutDesc, err := importccl.MakeSimpleTableDescriptor(
-		ctx, &semaCtx, st, createTable, parentID, keys.PublicSchemaID, tableID, importccl.NoFKs, hlc.UnixNano())
+	mutDesc, err := descingest.MakeSimpleTableDescriptor(
+		ctx, &semaCtx, st, createTable, parentID, keys.PublicSchemaID, tableID, descingest.NoFKs, hlc.UnixNano())
 	if err != nil {
 		return nil, err
 	}

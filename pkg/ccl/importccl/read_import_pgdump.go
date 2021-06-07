@@ -12,6 +12,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/ccl/descingest"
 	"io"
 	"regexp"
 	"strings"
@@ -301,7 +302,7 @@ func createPostgresSequences(
 	ctx context.Context,
 	parentID descpb.ID,
 	createSeq map[schemaAndTableName]*tree.CreateSequence,
-	fks fkHandler,
+	fks descingest.FKHandler,
 	walltime int64,
 	owner security.SQLUsername,
 	schemaNameToDesc map[string]*schemadesc.Mutable,
@@ -335,7 +336,7 @@ func createPostgresSequences(
 		if err != nil {
 			return nil, err
 		}
-		fks.resolver.tableNameToDesc[schemaAndTableName.String()] = desc
+		fks.Resolver.TableNameToDesc[schemaAndTableName.String()] = desc
 		ret = append(ret, desc)
 	}
 
@@ -346,7 +347,7 @@ func createPostgresTables(
 	evalCtx *tree.EvalContext,
 	p sql.JobExecContext,
 	createTbl map[schemaAndTableName]*tree.CreateTable,
-	fks fkHandler,
+	fks descingest.FKHandler,
 	backrefs map[descpb.ID]*tabledesc.Mutable,
 	parentID descpb.ID,
 	walltime int64,
@@ -368,12 +369,12 @@ func createPostgresTables(
 			schemaID = desc.ID
 		}
 		removeDefaultRegclass(create)
-		desc, err := MakeSimpleTableDescriptor(evalCtx.Ctx(), p.SemaCtx(), p.ExecCfg().Settings,
+		desc, err := descingest.MakeSimpleTableDescriptor(evalCtx.Ctx(), p.SemaCtx(), p.ExecCfg().Settings,
 			create, parentID, schemaID, getNextPlaceholderDescID(), fks, walltime)
 		if err != nil {
 			return nil, err
 		}
-		fks.resolver.tableNameToDesc[schemaAndTableName.String()] = desc
+		fks.Resolver.TableNameToDesc[schemaAndTableName.String()] = desc
 		backrefs[desc.ID] = desc
 		ret = append(ret, desc)
 	}
@@ -384,11 +385,11 @@ func createPostgresTables(
 func resolvePostgresFKs(
 	evalCtx *tree.EvalContext,
 	tableFKs map[schemaAndTableName][]*tree.ForeignKeyConstraintTableDef,
-	fks fkHandler,
+	fks descingest.FKHandler,
 	backrefs map[descpb.ID]*tabledesc.Mutable,
 ) error {
 	for schemaAndTableName, constraints := range tableFKs {
-		desc := fks.resolver.tableNameToDesc[schemaAndTableName.String()]
+		desc := fks.Resolver.TableNameToDesc[schemaAndTableName.String()]
 		if desc == nil {
 			continue
 		}
@@ -404,13 +405,13 @@ func resolvePostgresFKs(
 				constraint.Table.CatalogName = "defaultdb"
 			}
 			if err := sql.ResolveFK(
-				evalCtx.Ctx(), nil /* txn */, &fks.resolver, desc, constraint, backrefs, sql.NewTable,
+				evalCtx.Ctx(), nil /* txn */, &fks.Resolver, desc, constraint, backrefs, sql.NewTable,
 				tree.ValidationDefault, evalCtx,
 			); err != nil {
 				return err
 			}
 		}
-		if err := fixDescriptorFKState(desc); err != nil {
+		if err := descingest.FixDescriptorFKState(desc); err != nil {
 			return err
 		}
 	}
@@ -445,7 +446,7 @@ func readPostgresCreateTable(
 	match string,
 	parentID descpb.ID,
 	walltime int64,
-	fks fkHandler,
+	fks descingest.FKHandler,
 	max int,
 	owner security.SQLUsername,
 	unsupportedStmtLogger *unsupportedStmtLogger,
@@ -534,7 +535,7 @@ func readPostgresStmt(
 	ctx context.Context,
 	evalCtx *tree.EvalContext,
 	match string,
-	fks fkHandler,
+	fks descingest.FKHandler,
 	schemaObjects *schemaParsingObjects,
 	stmt interface{},
 	p sql.JobExecContext,
@@ -608,7 +609,7 @@ func readPostgresStmt(
 			case *tree.AlterTableAddConstraint:
 				switch con := cmd.ConstraintDef.(type) {
 				case *tree.ForeignKeyConstraintTableDef:
-					if !fks.skip {
+					if !fks.Skip {
 						if con.Table.Schema() == "" {
 							con.Table.SchemaName = tree.PublicSchemaName
 						}
