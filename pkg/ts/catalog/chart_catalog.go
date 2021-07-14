@@ -1772,6 +1772,18 @@ var charts = []sectionDescription{
 				Title:   "Memory Usage per Statement",
 				Metrics: []string{"sql.mem.bulk.max"},
 			},
+			{
+				Title:   "Bulk Written Bytes",
+				Metrics: []string{"bulk.written_bytes"},
+			},
+			{
+				Title: "Bulk SST Flushes",
+				Metrics: []string{
+					"bulk.sst_flushes.range",
+					"bulk.sst_flushes.size",
+					"bulk.sst_flushes.manual",
+				},
+			},
 		},
 	},
 	{

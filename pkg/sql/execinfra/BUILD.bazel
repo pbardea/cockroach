@@ -30,6 +30,7 @@ go_library(
         "//pkg/jobs",
         "//pkg/keys",
         "//pkg/kv",
+        "//pkg/kv/bulk",
         "//pkg/kv/kvclient/rangecache",
         "//pkg/kv/kvserver/diskmap",
         "//pkg/kv/kvserver/kvserverbase",
